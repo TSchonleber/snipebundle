@@ -21,6 +21,9 @@ export interface ActivePosition {
   bundle_id: string | null;
   opened_at_ms: number;
   status: string;
+  entry_price: number | null;
+  last_price: number | null;
+  unrealized_pct: number | null;
 }
 
 export interface EngineState {

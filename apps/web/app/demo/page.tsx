@@ -48,7 +48,10 @@ const SAMPLE_POSITIONS: ActivePosition[] = [
     wallet_count: 5,
     bundle_id: "9d3a7f2c1e8b…",
     opened_at_ms: Date.now() - 12000,
-    status: "buy live (9d3a7f2c…) — exit timer armed",
+    status: "buy live (9d3a7f2c…) — TP/SL/time armed",
+    entry_price: 0.0000023,
+    last_price: 0.0000031,
+    unrealized_pct: 34.8,
   },
 ];
 

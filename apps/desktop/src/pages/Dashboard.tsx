@@ -129,30 +129,57 @@ export function Dashboard() {
                 Active positions
               </div>
               <div className="divide-y divide-border/50">
-                {(state?.positions ?? []).map((p) => (
-                  <div key={p.mint} className="px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <div className="font-mono text-sm">
-                        {p.mint.slice(0, 12)}…
+                {(state?.positions ?? []).map((p) => {
+                  const pct = p.unrealized_pct;
+                  const pctColor =
+                    pct == null
+                      ? "text-fg-subtle"
+                      : pct >= 0
+                        ? "text-accent"
+                        : "text-danger";
+                  const pctLabel =
+                    pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+                  return (
+                    <div key={p.mint} className="px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="font-mono text-sm">
+                          {p.mint.slice(0, 12)}…
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`font-mono text-sm tabular-nums font-semibold ${pctColor}`}
+                          >
+                            {pctLabel}
+                          </span>
+                          <span className="font-mono text-xs uppercase tracking-wider text-accent">
+                            {p.trigger}
+                          </span>
+                        </div>
                       </div>
-                      <span className="font-mono text-xs uppercase tracking-wider text-accent">
-                        {p.trigger}
-                      </span>
+                      <div className="mt-1 flex items-center gap-3 text-sm text-fg-muted">
+                        <span>{p.entry_total_sol.toFixed(3)} SOL</span>
+                        <span>·</span>
+                        <span>{p.wallet_count} wallets</span>
+                        <span>·</span>
+                        <span>
+                          {Math.round((Date.now() - p.opened_at_ms) / 1000)}s
+                        </span>
+                        {p.entry_price != null && p.last_price != null && (
+                          <>
+                            <span>·</span>
+                            <span className="font-mono text-xs text-fg-subtle">
+                              {p.entry_price.toExponential(2)} →{" "}
+                              {p.last_price.toExponential(2)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-fg-subtle">
+                        {p.status}
+                      </div>
                     </div>
-                    <div className="mt-1 flex items-center gap-3 text-sm text-fg-muted">
-                      <span>{p.entry_total_sol.toFixed(3)} SOL</span>
-                      <span>·</span>
-                      <span>{p.wallet_count} wallets</span>
-                      <span>·</span>
-                      <span>
-                        {Math.round((Date.now() - p.opened_at_ms) / 1000)}s
-                      </span>
-                    </div>
-                    <div className="mt-1 font-mono text-xs text-fg-subtle">
-                      {p.status}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {(!state || state.positions.length === 0) && (
                   <div className="px-4 py-8 text-center text-fg-subtle">
                     No open positions.

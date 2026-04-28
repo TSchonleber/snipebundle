@@ -36,6 +36,9 @@ pub struct ActivePosition {
     pub bundle_id: Option<String>,
     pub opened_at_ms: i64,
     pub status: String,
+    pub entry_price: Option<f64>,
+    pub last_price: Option<f64>,
+    pub unrealized_pct: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -195,6 +198,9 @@ impl Engine {
             bundle_id: None,
             opened_at_ms: now_ms(),
             status: "firing buy bundle…".into(),
+            entry_price: None,
+            last_price: None,
+            unrealized_pct: None,
         };
         {
             let mut s = state.write().await;
@@ -210,32 +216,74 @@ impl Engine {
                         s.bundle_count += 1;
                         if let Some(p) = s.positions.iter_mut().find(|p| p.mint == mint) {
                             p.bundle_id = Some(bundle_id.clone());
-                            p.status = format!("buy live ({}…) — exit timer armed", &bundle_id[..8.min(bundle_id.len())]);
+                            p.status = format!(
+                                "buy live ({}…) — TP/SL/time armed",
+                                &bundle_id[..8.min(bundle_id.len())]
+                            );
                         }
                     }
 
-                    let (cancel_tx, cancel_rx) = watch::channel(false);
-                    drop(cancel_tx);
+                    let (_cancel_tx, cancel_rx) = watch::channel(false);
+                    let price_state =
+                        Arc::new(RwLock::new(exit::PositionPrice::default()));
+                    let mint_for_pump = mint.clone();
+                    let pump_state = Arc::clone(&state);
+                    let pump_price = Arc::clone(&price_state);
+                    let pump_handle = tokio::spawn(async move {
+                        let mut last_seen: Option<f64> = None;
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_millis(500))
+                                .await;
+                            let snap = pump_price.read().await.clone();
+                            if snap.unrealized_pct == last_seen {
+                                continue;
+                            }
+                            last_seen = snap.unrealized_pct;
+                            let mut s = pump_state.write().await;
+                            if let Some(p) =
+                                s.positions.iter_mut().find(|p| p.mint == mint_for_pump)
+                            {
+                                p.entry_price = snap.entry_price;
+                                p.last_price = snap.last_price;
+                                p.unrealized_pct = snap.unrealized_pct;
+                            } else {
+                                break;
+                            }
+                        }
+                    });
 
-                    let outcome = exit::watch_and_dump(
+                    let outcome = exit::watch_with_pricing(
                         snipers.clone(),
                         mint.clone(),
                         cfg.exit.clone(),
                         cfg.network.clone(),
                         cancel_rx,
+                        Arc::clone(&price_state),
                     )
                     .await;
 
+                    pump_handle.abort();
+
                     let mut s = state.write().await;
-                    let label = match outcome {
-                        exit::ExitOutcome::TimeExit => "time-exit",
-                        exit::ExitOutcome::ManualDump => "manual-dump",
-                        exit::ExitOutcome::Failed(_) => "exit-failed",
+                    let label = match &outcome {
+                        exit::ExitOutcome::TakeProfit { realized_pct } => {
+                            format!("take-profit +{:.1}%", realized_pct)
+                        }
+                        exit::ExitOutcome::StopLoss { realized_pct } => {
+                            format!("stop-loss {:.1}%", realized_pct)
+                        }
+                        exit::ExitOutcome::TimeExit { final_pct } => match final_pct {
+                            Some(p) => format!("time-exit ({:+.1}%)", p),
+                            None => "time-exit".into(),
+                        },
+                        exit::ExitOutcome::ManualDump => "manual-dump".into(),
+                        exit::ExitOutcome::Failed(e) => format!("exit-failed: {e}"),
                     };
                     if let Some(p) = s.positions.iter_mut().find(|p| p.mint == mint) {
                         p.status = format!("closed: {label}");
                     }
-                    s.last_message = format!("position closed {} ({label})", short(&mint));
+                    s.last_message =
+                        format!("position closed {} ({label})", short(&mint));
                 }
                 Err(e) => {
                     let mut s = state.write().await;

@@ -7,6 +7,7 @@ pub mod filters;
 pub mod exit;
 pub mod engine;
 pub mod launch;
+pub mod price_watcher;
 pub mod types;
 
 pub use config::Config;

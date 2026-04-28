@@ -109,9 +109,12 @@ then `pnpm --filter snipebundle-web build`).
        shared `@snipebundle/ui` component library
 - [x] M5c — placeholder icons (`tools/gen_icons.py`), Tauri capabilities,
        GitHub Actions release + CI workflows
-- [ ] M6 — TP/SL via per-position price polling
-- [ ] M7 — fund-fanout from master, balance polling, in-app updater
-- [ ] M8 — code-signed installers, Apple notarization, in-app updater wiring
+- [x] M6  — atomic legit launch bundle (create + dev buy)
+- [x] M6.5 — manual buy/sell with wallet picker (Trade page)
+- [x] M7  — TP/SL via per-position price polling (PumpPortal subscribeTokenTrade
+       per active mint), live unrealized P&L in dashboard
+- [ ] M8 — fund-fanout from master, balance polling, in-app updater
+- [ ] M9 — code-signed installers, Apple notarization, in-app updater wiring
 
 ## Repos / hosting
 
