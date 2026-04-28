@@ -300,25 +300,17 @@ export function Launch() {
               </CardHeader>
               {coBuyersEnabled && (
                 <CardBody className="space-y-4">
-                  <div className="rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs text-warn space-y-1.5">
+                  <div className="rounded-lg border border-border bg-bg-raised p-3 text-xs text-fg-muted space-y-1.5">
                     <p>
-                      <strong>Heads up.</strong> Co-buyers are sniper wallets
-                      you own buying alongside the dev's create.
+                      <strong className="text-fg">First 4 co-buyers</strong>{" "}
+                      land same-block as the create (one Jito bundle, fully
+                      atomic).
                     </p>
                     <p>
-                      <strong>First 4 co-buyers</strong> land same-block as
-                      the create (one Jito bundle, fully atomic).
-                    </p>
-                    <p>
-                      <strong>Co-buyers 5+</strong> land in follow-on bundles
-                      ~2s later. Curve has advanced; they pay slightly more
-                      than the first 4. Each follow-on bundle costs another
-                      Jito tip.
-                    </p>
-                    <p>
-                      Manual exits only — no auto-dump timer in this app.
-                      Dumping into retail buying would be pump-and-dump
-                      under pump.fun TOS / SEC Rule 10b-5.
+                      <strong className="text-fg">Co-buyers 5+</strong> land
+                      in follow-on bundles ~2s later. Curve has advanced;
+                      they pay slightly more than the first 4. Each follow-on
+                      bundle costs another Jito tip.
                     </p>
                   </div>
 
