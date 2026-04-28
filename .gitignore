@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# never commit
+config.toml
+keystore.bin
+*.keypair
+*.json.key
+.env
+.env.*
+!.env.example

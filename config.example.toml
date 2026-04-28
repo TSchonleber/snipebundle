@@ -1,0 +1,38 @@
+# snipebundle config — copy to config.toml and edit
+
+[wallets]
+count = 5                 # 1..=10
+max_sol_per_wallet = 1.0  # hard cap 5.0
+master_reserve_sol = 0.05
+
+[trigger]
+auto_enabled = true       # filter-based on every new mint
+targeted_enabled = true   # watchlist-based on specific dev wallets
+sol_per_snipe = 0.5       # SOL each sniper wallet spends per snipe (<= max_sol_per_wallet)
+
+[auto]
+min_dev_buy_pct = 5.0     # dev's initial buy as % of curve at create
+require_socials = true    # at least one of twitter/telegram/website
+max_entry_mc_sol = 50.0
+funder_blacklist = []
+
+[targeted]
+dev_wallets = [
+    # paste base58 dev wallet addresses to watch
+    # "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+]
+bypass_filters = true     # targeted hits skip auto filters
+
+[exit]
+take_profit_pct = 50.0
+stop_loss_pct = 30.0
+max_hold_seconds = 60     # capped at 600
+
+[network]
+rpc_url = "https://api.mainnet-beta.solana.com"
+pumpportal_ws = "wss://pumpportal.fun/api/data"
+trade_local_url = "https://pumpportal.fun/api/trade-local"
+jito_block_engine = "https://mainnet.block-engine.jito.wtf/api/v1/bundles"
+jito_tip_sol = 0.001       # paid via priorityFee on tx[0]
+priority_fee_sol = 0.0001
+slippage_bps = 5000        # 50%
