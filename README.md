@@ -15,9 +15,11 @@ cargo run -- listen --limit 20         # stream 20 then exit
 cargo run -- snipe <MINT> --sol 0.1    # build → sign → submit Jito buy bundle
 cargo run -- snipe <MINT> --wallets 0,1,2 --sol 0.05
 cargo run -- dump <MINT>               # exit positions on this mint via Jito
+cargo run -- auto                      # headless auto-sniper (filters + 60s exit)
+cargo run -- run                       # live ratatui TUI with feed + positions
 ```
 
-`run` (live TUI w/ auto-snipe) lands in M3 along with filter & targeted-dev triggers and the 60s exit watcher.
+In the TUI: `q` quit, `p` pause auto-fire (still streams feed).
 
 ## Trigger modes
 
@@ -56,7 +58,9 @@ by Pumpportal per their docs.
 
 - [x] M1 — scaffold, keystore, wallet gen
 - [x] M2 — listener, bundler, Jito submit, manual snipe/dump CLI
-- [ ] M3 — filter/targeted-dev triggers, exit watcher, ratatui TUI
+- [x] M3a — engine: filter + targeted-dev triggers, time-based 60s exit, headless `auto`
+- [x] M3b — ratatui TUI with live feed, positions, status, pause toggle
+- [ ] M3c — TP/SL via per-position price polling (currently time-only)
 - [ ] M4 — fund-fanout from master, balance polling
 - [ ] M5 — Tauri GUI
 

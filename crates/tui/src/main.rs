@@ -1,3 +1,5 @@
+mod ui;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use snipebundle_core::{
@@ -5,10 +7,11 @@ use snipebundle_core::{
     keystore::{self, Keystore, StoredKeypair},
     listener,
     types::MintEvent,
-    wallet, Config,
+    wallet, Config, Engine,
 };
 use std::path::PathBuf;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 #[derive(Parser)]
@@ -36,12 +39,11 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         limit: u32,
     },
-    /// Manually fire a buy bundle for a given mint address (testing M2 hot path)
+    /// Manually fire a buy bundle for a given mint address
     Snipe {
         mint: String,
         #[arg(long)]
         sol: Option<f64>,
-        /// comma-separated sniper indices, or "all"
         #[arg(long, default_value = "all")]
         wallets: String,
     },
@@ -51,7 +53,9 @@ enum Cmd {
         #[arg(long, default_value = "all")]
         wallets: String,
     },
-    /// Run the live sniper TUI (placeholder until milestone 3)
+    /// Run the auto-sniper headless (no TUI, logs to stdout)
+    Auto,
+    /// Run the auto-sniper with the live ratatui TUI
     Run,
 }
 
@@ -62,6 +66,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,snipebundle=debug")),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
@@ -75,7 +80,8 @@ async fn main() -> Result<()> {
         Cmd::Listen { limit } => listen(&cfg, limit).await,
         Cmd::Snipe { mint, sol, wallets } => snipe(&cfg, &mint, sol, &wallets).await,
         Cmd::Dump { mint, wallets } => dump(&cfg, &mint, &wallets).await,
-        Cmd::Run => run_tui(&cfg).await,
+        Cmd::Auto => auto(&cfg).await,
+        Cmd::Run => run_tui(cfg).await,
     }
 }
 
@@ -224,11 +230,49 @@ async fn dump(cfg: &Config, mint: &str, wallets: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_selected_snipers(spec: &str) -> Result<(Vec<StoredKeypair>, Keystore)> {
+async fn auto(cfg: &Config) -> Result<()> {
+    let ks = load_keystore()?;
+    let engine = Arc::new(Engine::new(cfg.clone(), ks));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (_paused_tx, paused_rx) = watch::channel(false);
+
+    info!("auto mode running. Ctrl-C to stop.");
+
+    let engine_clone = Arc::clone(&engine);
+    let run_handle = tokio::spawn(async move { engine_clone.run(cancel_rx, paused_rx).await });
+
+    tokio::signal::ctrl_c().await?;
+    println!("\nshutting down…");
+    cancel_tx.send(true).ok();
+    let _ = run_handle.await;
+    Ok(())
+}
+
+async fn run_tui(cfg: Config) -> Result<()> {
+    let ks = load_keystore()?;
+    let engine = Arc::new(Engine::new(cfg, ks));
+    let state = engine.state_handle();
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (paused_tx, paused_rx) = watch::channel(false);
+
+    let engine_clone = Arc::clone(&engine);
+    let run_handle = tokio::spawn(async move { engine_clone.run(cancel_rx, paused_rx).await });
+
+    let result = ui::run(state, cancel_tx.clone(), paused_tx).await;
+
+    cancel_tx.send(true).ok();
+    let _ = run_handle.await;
+    result
+}
+
+fn load_keystore() -> Result<Keystore> {
     let path = keystore::keystore_path()?;
     let pass = rpassword::prompt_password("keystore passphrase: ")?;
-    let ks = keystore::load(&path, &pass)?;
+    keystore::load(&path, &pass)
+}
 
+fn load_selected_snipers(spec: &str) -> Result<(Vec<StoredKeypair>, Keystore)> {
+    let ks = load_keystore()?;
     let selected: Vec<StoredKeypair> = if spec == "all" {
         ks.snipers.clone()
     } else {
@@ -246,12 +290,6 @@ fn load_selected_snipers(spec: &str) -> Result<(Vec<StoredKeypair>, Keystore)> {
     };
     anyhow::ensure!(!selected.is_empty(), "no snipers selected");
     Ok((selected, ks))
-}
-
-async fn run_tui(_cfg: &Config) -> Result<()> {
-    println!("[milestone 3] live TUI lands next session.");
-    println!("today you can: `listen`, `snipe <mint>`, `dump <mint>`.");
-    Ok(())
 }
 
 fn prompt_new_passphrase() -> Result<String> {

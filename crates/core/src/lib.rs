@@ -5,7 +5,9 @@ pub mod listener;
 pub mod bundler;
 pub mod filters;
 pub mod exit;
+pub mod engine;
 pub mod types;
 
 pub use config::Config;
+pub use engine::{Engine, EngineState, FeedEntry, ActivePosition};
 pub use types::{MintEvent, Position, TriggerSource};
