@@ -760,7 +760,7 @@ fn spawn_universal_wallet_exits(wallets: Vec<StoredKeypair>, mint: String, cfg: 
         let wallet_rules = wallets
             .into_iter()
             .map(|wallet| {
-                let rule = cfg.exit_for_wallet(&wallet.pubkey);
+                let rule = cfg.resolved_exit_for_wallet(&wallet.pubkey);
                 (wallet, rule)
             })
             .collect::<Vec<_>>();

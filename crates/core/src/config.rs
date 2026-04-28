@@ -378,21 +378,50 @@ impl Config {
     }
 
     pub fn exit_for_wallet(&self, pubkey: &str) -> ExitConfig {
-        // v0.1.17 shared templates + per-wallet binding wins
-        if let Some(binding) = self.wallet_bindings.get(pubkey) {
-            return binding.resolve(&self.profile_templates);
-        }
-        // v0.1.12 per-wallet profile bundle (legacy)
-        if let Some(profiles) = self.wallet_profiles.get(pubkey) {
-            return profiles.active();
-        }
-        // v0.1.10 single-rule (legacy)
-        if let Some(rule) = self.wallet_exit_rules.get(pubkey) {
-            return rule.clone();
-        }
-        // global fallback
-        self.exit.clone()
+        self.resolved_exit_for_wallet(pubkey).rule
     }
+
+    /// v0.1.18: full exit rule + per-wallet toggles (SL on/off, trailing-stop %).
+    /// The engine's exit watcher needs the toggles, not just the TP/SL/hold
+    /// numbers. Precedence matches `exit_for_wallet`: bindings → legacy profiles
+    /// → legacy single-rule → global.
+    pub fn resolved_exit_for_wallet(&self, pubkey: &str) -> ResolvedExit {
+        if let Some(b) = self.wallet_bindings.get(pubkey) {
+            return ResolvedExit {
+                rule: b.resolve(&self.profile_templates),
+                stop_loss_enabled: b.stop_loss_enabled,
+                trailing_stop_pct: b.trailing_stop_pct,
+            };
+        }
+        if let Some(p) = self.wallet_profiles.get(pubkey) {
+            return ResolvedExit {
+                rule: p.active(),
+                stop_loss_enabled: p.stop_loss_enabled,
+                trailing_stop_pct: p.trailing_stop_pct,
+            };
+        }
+        if let Some(r) = self.wallet_exit_rules.get(pubkey) {
+            return ResolvedExit {
+                rule: r.clone(),
+                stop_loss_enabled: true,
+                trailing_stop_pct: None,
+            };
+        }
+        ResolvedExit {
+            rule: self.exit.clone(),
+            stop_loss_enabled: true,
+            trailing_stop_pct: None,
+        }
+    }
+}
+
+/// Per-wallet exit rule resolved at run-time. Includes the TP/SL/hold numbers
+/// plus the per-wallet toggles (SL on/off, optional trailing-stop percent).
+#[derive(Debug, Clone)]
+pub struct ResolvedExit {
+    pub rule: ExitConfig,
+    pub stop_loss_enabled: bool,
+    pub trailing_stop_pct: Option<f64>,
 }
 
 impl ExitConfig {

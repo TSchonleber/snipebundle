@@ -1,5 +1,5 @@
 use crate::bundler;
-use crate::config::{ExitConfig, NetworkConfig};
+use crate::config::{NetworkConfig, ResolvedExit};
 use crate::keystore::StoredKeypair;
 use crate::price_watcher::{self, TradeUpdate};
 use anyhow::Result;
@@ -13,6 +13,9 @@ use tracing::{info, warn};
 pub enum ExitOutcome {
     TakeProfit { realized_pct: f64 },
     StopLoss { realized_pct: f64 },
+    /// Trailing-stop fired: `peak_pct` is the highest unrealized P&L the
+    /// position reached, `realized_pct` is the P&L at exit. v0.1.18.
+    TrailingStop { realized_pct: f64, peak_pct: f64 },
     TimeExit { final_pct: Option<f64> },
     ManualDump,
     Failed(String),
@@ -23,6 +26,7 @@ impl ExitOutcome {
         match self {
             ExitOutcome::TakeProfit { .. } => "take-profit",
             ExitOutcome::StopLoss { .. } => "stop-loss",
+            ExitOutcome::TrailingStop { .. } => "trailing-stop",
             ExitOutcome::TimeExit { .. } => "time-exit",
             ExitOutcome::ManualDump => "manual",
             ExitOutcome::Failed(_) => "failed",
@@ -33,6 +37,7 @@ impl ExitOutcome {
         match self {
             ExitOutcome::TakeProfit { realized_pct } => Some(*realized_pct),
             ExitOutcome::StopLoss { realized_pct } => Some(*realized_pct),
+            ExitOutcome::TrailingStop { realized_pct, .. } => Some(*realized_pct),
             ExitOutcome::TimeExit { final_pct } => *final_pct,
             ExitOutcome::ManualDump | ExitOutcome::Failed(_) => None,
         }
@@ -54,11 +59,11 @@ pub struct PositionPrice {
     pub unrealized_pct: Option<f64>,
 }
 
-/// Arm each wallet with its own TP/SL/max-hold config. This intentionally
-/// runs one watcher per wallet because each wallet may have a different rule
-/// and therefore a different exit time.
+/// Arm each wallet with its own TP/SL/max-hold config + per-wallet toggles
+/// (SL on/off, optional trailing-stop %). One watcher per wallet because each
+/// wallet may have a different rule and exit time.
 pub async fn watch_wallets_with_pricing(
-    wallets: Vec<(StoredKeypair, ExitConfig)>,
+    wallets: Vec<(StoredKeypair, ResolvedExit)>,
     mint: String,
     net: NetworkConfig,
     cancel: watch::Receiver<bool>,
@@ -104,23 +109,27 @@ pub async fn watch_wallets_with_pricing(
 /// Watch a position's price feed and fire the sell bundle when whichever of
 /// the following hits first:
 ///   - take_profit_pct reached
-///   - stop_loss_pct breached
+///   - stop_loss_pct breached (only when `stop_loss_enabled` is true)
+///   - trailing_stop_pct drop from peak (when `trailing_stop_pct` is Some)
 ///   - max_hold_seconds elapsed
 ///   - manual cancel via `cancel`
 pub async fn watch_with_pricing(
     snipers: Vec<StoredKeypair>,
     mint: String,
-    cfg: ExitConfig,
+    resolved: ResolvedExit,
     net: NetworkConfig,
     cancel: watch::Receiver<bool>,
     price_state: Arc<RwLock<PositionPrice>>,
 ) -> ExitOutcome {
+    let cfg = &resolved.rule;
     info!(
         mint = %mint,
         tp = cfg.take_profit_pct,
         sl = cfg.stop_loss_pct,
+        sl_on = resolved.stop_loss_enabled,
+        ts = ?resolved.trailing_stop_pct,
         secs = cfg.max_hold_seconds,
-        "exit watcher armed (TP/SL/time)"
+        "exit watcher armed"
     );
 
     let snipe_set: HashSet<String> = snipers.iter().map(|s| s.pubkey.clone()).collect();
@@ -136,6 +145,10 @@ pub async fn watch_with_pricing(
     let deadline = Instant::now() + Duration::from_secs(cfg.max_hold_seconds);
     let mut entry: Option<f64> = None;
     let mut last_pct: Option<f64> = None;
+    // Highest unrealized P&L seen — only tracked when trailing-stop is on.
+    // Seeded at 0 so a position must move into profit before the trailing
+    // stop can arm; otherwise a slight initial dip would trip it instantly.
+    let mut peak_pct: f64 = 0.0;
     let mut cancel_rx = cancel.clone();
 
     let outcome = loop {
@@ -184,8 +197,22 @@ pub async fn watch_with_pricing(
                     if pct >= cfg.take_profit_pct {
                         break ExitOutcome::TakeProfit { realized_pct: pct };
                     }
-                    if pct <= -cfg.stop_loss_pct {
+                    if resolved.stop_loss_enabled && pct <= -cfg.stop_loss_pct {
                         break ExitOutcome::StopLoss { realized_pct: pct };
+                    }
+                    if let Some(ts) = resolved.trailing_stop_pct {
+                        if pct > peak_pct {
+                            peak_pct = pct;
+                        }
+                        // Only arm once we've actually been in profit.
+                        // `peak_pct - ts` would be negative for a never-up
+                        // position and could fire on routine entry slippage.
+                        if peak_pct > 0.0 && pct <= peak_pct - ts {
+                            break ExitOutcome::TrailingStop {
+                                realized_pct: pct,
+                                peak_pct,
+                            };
+                        }
                     }
                 }
             }

@@ -349,7 +349,7 @@ impl Engine {
                         .iter()
                         .cloned()
                         .map(|wallet| {
-                            let rule = cfg.exit_for_wallet(&wallet.pubkey);
+                            let rule = cfg.resolved_exit_for_wallet(&wallet.pubkey);
                             (wallet, rule)
                         })
                         .collect::<Vec<_>>();
@@ -602,6 +602,7 @@ fn summarize_wallet_exits(
 
     let mut take_profit = 0usize;
     let mut stop_loss = 0usize;
+    let mut trailing_stop = 0usize;
     let mut time_exit = 0usize;
     let mut manual = 0usize;
     let mut failed = 0usize;
@@ -612,6 +613,7 @@ fn summarize_wallet_exits(
         match result.outcome.kind() {
             "take-profit" => take_profit += 1,
             "stop-loss" => stop_loss += 1,
+            "trailing-stop" => trailing_stop += 1,
             "time-exit" => time_exit += 1,
             "manual" => manual += 1,
             "failed" => failed += 1,
@@ -641,6 +643,9 @@ fn summarize_wallet_exits(
     if stop_loss > 0 {
         parts.push(format!("{stop_loss} SL"));
     }
+    if trailing_stop > 0 {
+        parts.push(format!("{trailing_stop} TS"));
+    }
     if time_exit > 0 {
         parts.push(format!("{time_exit} hold"));
     }
@@ -651,7 +656,7 @@ fn summarize_wallet_exits(
         parts.push(format!("{failed} failed"));
     }
 
-    let nonzero_kinds = [take_profit, stop_loss, time_exit, manual, failed]
+    let nonzero_kinds = [take_profit, stop_loss, trailing_stop, time_exit, manual, failed]
         .iter()
         .filter(|count| **count > 0)
         .count();
