@@ -38,6 +38,7 @@ pub fn run() {
             commands::fan_out_from_master,
             commands::add_sniper_wallet,
             commands::delete_wallet,
+            commands::get_trending,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

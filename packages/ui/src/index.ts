@@ -8,8 +8,10 @@ export type {
   TriggerSource,
   FeedEntry,
   ActivePosition,
+  ClosedPosition,
   EngineState,
   WalletInfo,
   WalletWithSecret,
   PumpportalNewToken,
+  TrendingItem,
 } from "./lib/types";

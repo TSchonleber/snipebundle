@@ -11,6 +11,7 @@ pub mod engine;
 pub mod funding;
 pub mod launch;
 pub mod price_watcher;
+pub mod trending;
 pub mod types;
 
 pub use amounts::AmountStrategy;

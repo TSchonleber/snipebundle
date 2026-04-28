@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button, Card, CardBody, CardHeader, cn } from "@snipebundle/ui";
 import type { WalletInfo } from "@snipebundle/ui";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -14,13 +15,14 @@ interface LaunchSellTarget {
 }
 
 export function Launch() {
+  const [params] = useSearchParams();
   const [devWallets, setDevWallets] = useState<WalletInfo[]>([]);
   const [snipers, setSnipers] = useState<WalletInfo[]>([]);
   const [selectedDev, setSelectedDev] = useState<string>("");
 
-  // form
-  const [name, setName] = useState("");
-  const [symbol, setSymbol] = useState("");
+  // form (prefill from URL params if Trending sent us here)
+  const [name, setName] = useState(params.get("name") ?? "");
+  const [symbol, setSymbol] = useState(params.get("symbol") ?? "");
   const [description, setDescription] = useState("");
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [twitter, setTwitter] = useState("");

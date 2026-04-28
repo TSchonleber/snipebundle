@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EngineState,
+  TrendingItem,
   WalletInfo,
   WalletWithSecret,
 } from "@snipebundle/ui";
@@ -159,4 +160,5 @@ export const ipc = {
     }),
   deleteWallet: (pubkey: string, passphrase: string) =>
     invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
+  getTrending: () => invoke<TrendingItem[]>("get_trending"),
 };

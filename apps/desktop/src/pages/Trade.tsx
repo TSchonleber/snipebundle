@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Button,
   Card,
@@ -20,7 +21,8 @@ interface BundleRecord {
 type StrategyKind = "uniform" | "per_wallet" | "random";
 
 export function Trade() {
-  const [mint, setMint] = useState("");
+  const [params] = useSearchParams();
+  const [mint, setMint] = useState(params.get("mint") ?? "");
   const [strategy, setStrategy] = useState<StrategyKind>("uniform");
   const [uniformSol, setUniformSol] = useState("0.05");
   const [perWalletAmounts, setPerWalletAmounts] = useState<Record<string, string>>({});

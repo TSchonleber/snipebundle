@@ -41,15 +41,39 @@ pub struct ActivePosition {
     pub unrealized_pct: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ClosedPosition {
+    pub mint: String,
+    pub trigger: TriggerSource,
+    pub entry_total_sol: f64,
+    pub wallet_count: usize,
+    pub bundle_id: Option<String>,
+    pub opened_at_ms: i64,
+    pub closed_at_ms: i64,
+    pub exit_kind: String,        // "take-profit" | "stop-loss" | "time-exit" | "manual" | "failed"
+    pub realized_pct: Option<f64>,
+    pub entry_price: Option<f64>,
+    pub last_price: Option<f64>,
+    pub status_label: String,     // human-readable summary, same as ActivePosition.status had
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct EngineState {
     pub feed: VecDeque<FeedEntry>,
     pub positions: Vec<ActivePosition>,
+    pub closed_positions: VecDeque<ClosedPosition>,
     pub running: bool,
     pub last_message: String,
     pub mint_count: u64,
     pub matched_count: u64,
     pub bundle_count: u64,
+    pub realized_wins: u64,
+    pub realized_losses: u64,
+    /// Sum of all positions' entry_total_sol (open + closed). Useful for the
+    /// dashboard's running "deployed capital" metric.
+    pub deployed_sol_total: f64,
+    /// Sum of (entry_total_sol × realized_pct/100) across closed positions.
+    pub realized_pnl_sol: f64,
 }
 
 pub struct Engine {
@@ -241,6 +265,7 @@ impl Engine {
         {
             let mut s = state.write().await;
             s.positions.push(pos);
+            s.deployed_sol_total += total;
             s.last_message = format!("sniping {} ({:?})", short(&mint), trigger);
         }
 
@@ -300,24 +325,76 @@ impl Engine {
 
                     pump_handle.abort();
 
-                    let mut s = state.write().await;
-                    let label = match &outcome {
-                        exit::ExitOutcome::TakeProfit { realized_pct } => {
-                            format!("take-profit +{:.1}%", realized_pct)
+                    let (label, kind, realized_pct) = match &outcome {
+                        exit::ExitOutcome::TakeProfit { realized_pct } => (
+                            format!("take-profit +{:.1}%", realized_pct),
+                            "take-profit",
+                            Some(*realized_pct),
+                        ),
+                        exit::ExitOutcome::StopLoss { realized_pct } => (
+                            format!("stop-loss {:.1}%", realized_pct),
+                            "stop-loss",
+                            Some(*realized_pct),
+                        ),
+                        exit::ExitOutcome::TimeExit { final_pct } => (
+                            match final_pct {
+                                Some(p) => format!("time-exit ({:+.1}%)", p),
+                                None => "time-exit".into(),
+                            },
+                            "time-exit",
+                            *final_pct,
+                        ),
+                        exit::ExitOutcome::ManualDump => {
+                            ("manual-dump".into(), "manual", None)
                         }
-                        exit::ExitOutcome::StopLoss { realized_pct } => {
-                            format!("stop-loss {:.1}%", realized_pct)
+                        exit::ExitOutcome::Failed(e) => {
+                            (format!("exit-failed: {e}"), "failed", None)
                         }
-                        exit::ExitOutcome::TimeExit { final_pct } => match final_pct {
-                            Some(p) => format!("time-exit ({:+.1}%)", p),
-                            None => "time-exit".into(),
-                        },
-                        exit::ExitOutcome::ManualDump => "manual-dump".into(),
-                        exit::ExitOutcome::Failed(e) => format!("exit-failed: {e}"),
                     };
-                    if let Some(p) = s.positions.iter_mut().find(|p| p.mint == mint) {
-                        p.status = format!("closed: {label}");
+
+                    let mut s = state.write().await;
+
+                    // Snapshot the active position so we can move it to closed.
+                    let snapshot = s
+                        .positions
+                        .iter()
+                        .find(|p| p.mint == mint)
+                        .cloned();
+
+                    if let Some(active) = snapshot {
+                        let realized_sol = realized_pct
+                            .map(|pct| active.entry_total_sol * pct / 100.0);
+                        if let Some(pct) = realized_pct {
+                            if pct >= 0.0 {
+                                s.realized_wins += 1;
+                            } else {
+                                s.realized_losses += 1;
+                            }
+                            if let Some(rs) = realized_sol {
+                                s.realized_pnl_sol += rs;
+                            }
+                        }
+                        let closed = ClosedPosition {
+                            mint: active.mint.clone(),
+                            trigger: active.trigger,
+                            entry_total_sol: active.entry_total_sol,
+                            wallet_count: active.wallet_count,
+                            bundle_id: active.bundle_id.clone(),
+                            opened_at_ms: active.opened_at_ms,
+                            closed_at_ms: now_ms(),
+                            exit_kind: kind.into(),
+                            realized_pct,
+                            entry_price: active.entry_price,
+                            last_price: active.last_price,
+                            status_label: format!("closed: {label}"),
+                        };
+                        s.closed_positions.push_front(closed);
+                        if s.closed_positions.len() > 100 {
+                            s.closed_positions.truncate(100);
+                        }
+                        s.positions.retain(|p| p.mint != mint);
                     }
+
                     s.last_message =
                         format!("position closed {} ({label})", short(&mint));
                 }

@@ -7,6 +7,8 @@ import {
   MintFeedRow,
   type EngineState,
 } from "@snipebundle/ui";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _unused = EngineState;
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { SniperSettings } from "../components/SniperSettings";
@@ -94,7 +96,7 @@ export function Dashboard() {
           </Card>
         )}
 
-        <div className="mb-6 grid grid-cols-3 gap-4">
+        <div className="mb-4 grid grid-cols-3 gap-4">
           <Stat label="mints seen" value={state?.mint_count ?? 0} />
           <Stat
             label="matched"
@@ -103,6 +105,9 @@ export function Dashboard() {
           />
           <Stat label="bundles fired" value={state?.bundle_count ?? 0} />
         </div>
+
+        <PnlBar state={state} />
+
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
@@ -188,6 +193,8 @@ export function Dashboard() {
                 )}
               </div>
             </Card>
+
+            <ClosedPositionsLog state={state} />
           </div>
 
           <aside className="space-y-3">
@@ -206,6 +213,192 @@ export function Dashboard() {
         </div>
       </div>
     </div>
+  );
+}
+
+function PnlBar({ state }: { state: EngineState | null }) {
+  if (!state) return null;
+  const realized = state.realized_pnl_sol ?? 0;
+  const deployed = state.deployed_sol_total ?? 0;
+  const unrealized = (state.positions ?? []).reduce((acc, p) => {
+    if (p.entry_price == null || p.unrealized_pct == null) return acc;
+    return acc + (p.entry_total_sol * p.unrealized_pct) / 100;
+  }, 0);
+  const net = realized + unrealized;
+  const wins = state.realized_wins ?? 0;
+  const losses = state.realized_losses ?? 0;
+  const total = wins + losses;
+  const winRate = total === 0 ? null : (wins / total) * 100;
+
+  const fmt = (n: number) =>
+    `${n >= 0 ? "+" : ""}${n.toFixed(4)} SOL`;
+  const color = (n: number) =>
+    n > 0 ? "text-accent" : n < 0 ? "text-danger" : "text-fg-muted";
+
+  return (
+    <Card className="mb-4">
+      <CardBody className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        <PnlCell label="Net P&L" value={fmt(net)} className={color(net)} bold />
+        <PnlCell
+          label="Realized"
+          value={fmt(realized)}
+          className={color(realized)}
+        />
+        <PnlCell
+          label="Unrealized"
+          value={fmt(unrealized)}
+          className={color(unrealized)}
+        />
+        <PnlCell
+          label="Deployed"
+          value={`${deployed.toFixed(4)} SOL`}
+          className="text-fg"
+        />
+        <PnlCell
+          label="Win rate"
+          value={
+            winRate == null
+              ? "—"
+              : `${winRate.toFixed(0)}% (${wins}W ${losses}L)`
+          }
+          className={
+            winRate == null
+              ? "text-fg-subtle"
+              : winRate >= 50
+                ? "text-accent"
+                : "text-warn"
+          }
+        />
+      </CardBody>
+    </Card>
+  );
+}
+
+function PnlCell({
+  label,
+  value,
+  className,
+  bold,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+  bold?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-mono uppercase tracking-wider text-fg-subtle">
+        {label}
+      </div>
+      <div
+        className={`mt-1 font-mono tabular-nums ${
+          bold ? "text-xl font-bold" : "text-sm"
+        } ${className ?? ""}`}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ClosedPositionsLog({ state }: { state: EngineState | null }) {
+  const closed = state?.closed_positions ?? [];
+  if (closed.length === 0) {
+    return (
+      <Card className="overflow-hidden">
+        <div className="border-b border-border bg-bg-raised px-4 py-2 text-xs font-mono uppercase tracking-wider text-fg-subtle">
+          Closed positions
+        </div>
+        <CardBody className="text-center text-fg-subtle text-sm">
+          No closed positions yet.
+        </CardBody>
+      </Card>
+    );
+  }
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-border bg-bg-raised px-4 py-2 text-xs font-mono uppercase tracking-wider text-fg-subtle flex items-center justify-between">
+        <span>Closed positions ({closed.length})</span>
+        <span className="text-[10px]">last 100 retained</span>
+      </div>
+      <div className="divide-y divide-border/50 max-h-[40vh] overflow-y-auto">
+        {closed.map((p) => {
+          const pct = p.realized_pct;
+          const pctColor =
+            pct == null
+              ? "text-fg-subtle"
+              : pct >= 0
+                ? "text-accent"
+                : "text-danger";
+          const pctLabel =
+            pct == null
+              ? "—"
+              : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+          const realizedSol =
+            pct != null ? (p.entry_total_sol * pct) / 100 : null;
+          const exitColor: Record<string, string> = {
+            "take-profit": "text-accent",
+            "stop-loss": "text-danger",
+            "time-exit": "text-fg-muted",
+            manual: "text-fg-muted",
+            failed: "text-danger",
+          };
+          return (
+            <div key={`${p.mint}-${p.closed_at_ms}`} className="px-4 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="font-mono text-xs text-fg-muted">
+                  {p.mint.slice(0, 12)}…
+                </div>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`font-mono text-sm tabular-nums font-semibold ${pctColor}`}
+                  >
+                    {pctLabel}
+                  </span>
+                  {realizedSol != null && (
+                    <span
+                      className={`font-mono text-xs tabular-nums ${pctColor}`}
+                    >
+                      {realizedSol >= 0 ? "+" : ""}
+                      {realizedSol.toFixed(4)} SOL
+                    </span>
+                  )}
+                  <span
+                    className={`font-mono text-[10px] uppercase tracking-wider ${
+                      exitColor[p.exit_kind] ?? "text-fg-subtle"
+                    }`}
+                  >
+                    {p.exit_kind}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-0.5 flex items-center gap-3 text-[11px] text-fg-subtle">
+                <span>{p.entry_total_sol.toFixed(3)} SOL in</span>
+                <span>·</span>
+                <span>{p.wallet_count}w</span>
+                <span>·</span>
+                <span>
+                  {Math.round((p.closed_at_ms - p.opened_at_ms) / 1000)}s held
+                </span>
+                {p.bundle_id && (
+                  <>
+                    <span>·</span>
+                    <a
+                      href={`https://explorer.jito.wtf/bundle/${p.bundle_id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-accent hover:underline"
+                    >
+                      buy bundle
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

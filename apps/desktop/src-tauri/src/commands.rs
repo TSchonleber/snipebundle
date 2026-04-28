@@ -251,12 +251,22 @@ pub async fn get_state(state: State<'_, AppState>) -> Result<Option<EngineState>
     Ok(Some(EngineState {
         feed: snap.feed.clone(),
         positions: snap.positions.clone(),
+        closed_positions: snap.closed_positions.clone(),
         running: snap.running,
         last_message: snap.last_message.clone(),
         mint_count: snap.mint_count,
         matched_count: snap.matched_count,
         bundle_count: snap.bundle_count,
+        realized_wins: snap.realized_wins,
+        realized_losses: snap.realized_losses,
+        deployed_sol_total: snap.deployed_sol_total,
+        realized_pnl_sol: snap.realized_pnl_sol,
     }))
+}
+
+#[tauri::command]
+pub async fn get_trending() -> Result<Vec<snipebundle_core::trending::TrendingItem>> {
+    Ok(snipebundle_core::trending::fetch_all().await)
 }
 
 #[derive(Deserialize)]
