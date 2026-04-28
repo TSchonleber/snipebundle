@@ -18,6 +18,19 @@ pub fn from_stored(stored: &StoredKeypair) -> Result<Keypair> {
     Keypair::try_from(bytes.as_slice()).map_err(|e| anyhow::anyhow!("keypair from bytes: {e}"))
 }
 
+pub fn from_b58_secret(label: &str, secret_b58: &str) -> Result<StoredKeypair> {
+    let bytes = bs58::decode(secret_b58)
+        .into_vec()
+        .map_err(|e| anyhow::anyhow!("decode b58 secret: {e}"))?;
+    let kp = Keypair::try_from(bytes.as_slice())
+        .map_err(|e| anyhow::anyhow!("keypair from bytes: {e}"))?;
+    Ok(StoredKeypair {
+        label: label.to_string(),
+        pubkey: kp.pubkey().to_string(),
+        secret_b58: secret_b58.to_string(),
+    })
+}
+
 pub fn generate_snipers(n: u32) -> Vec<StoredKeypair> {
     (0..n).map(|i| generate(&format!("sniper-{i}"))).collect()
 }

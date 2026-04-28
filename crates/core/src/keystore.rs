@@ -32,6 +32,8 @@ pub struct StoredKeypair {
 pub struct Keystore {
     pub master: Option<StoredKeypair>,
     pub snipers: Vec<StoredKeypair>,
+    #[serde(default)]
+    pub dev_wallets: Vec<StoredKeypair>,
 }
 
 pub fn keystore_path() -> Result<PathBuf> {

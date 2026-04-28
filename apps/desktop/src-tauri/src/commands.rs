@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use snipebundle_core::{
     bundler,
     keystore::{self, Keystore, StoredKeypair},
+    launch::{self, LaunchMetadata, LaunchResult},
     wallet, Config, Engine, EngineState,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::{watch, RwLock};
@@ -254,12 +256,33 @@ pub async fn get_state(state: State<'_, AppState>) -> Result<Option<EngineState>
     }))
 }
 
+#[derive(Deserialize)]
+pub struct ManualBuyArgs {
+    pub mint: String,
+    pub sol: f64,
+    /// Wallet pubkeys to buy with. Each must exist in the keystore (master,
+    /// snipers, or dev_wallets). Max 5 (Jito/PumpPortal bundle ceiling).
+    pub wallet_pubkeys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ManualSellArgs {
+    pub mint: String,
+    /// Wallet pubkeys to sell from. Each sells 100% of its holdings of `mint`.
+    pub wallet_pubkeys: Vec<String>,
+}
+
 #[tauri::command]
 pub async fn manual_snipe(
-    mint: String,
-    sol: Option<f64>,
+    args: ManualBuyArgs,
     state: State<'_, AppState>,
 ) -> Result<String> {
+    if args.wallet_pubkeys.is_empty() {
+        return Err("select at least one wallet".into());
+    }
+    if args.wallet_pubkeys.len() > 5 {
+        return Err("max 5 wallets per bundle".into());
+    }
     let cfg = state
         .config
         .lock()
@@ -273,15 +296,26 @@ pub async fn manual_snipe(
         .clone()
         .ok_or("keystore locked")?;
 
-    let snipers: Vec<StoredKeypair> = ks.snipers;
-    let amount = sol.unwrap_or(cfg.trigger.sol_per_snipe);
-    bundler::execute_buy(&snipers, &mint, amount, &cfg.network)
+    let mut selected = Vec::with_capacity(args.wallet_pubkeys.len());
+    for pk in &args.wallet_pubkeys {
+        let kp = find_wallet(&ks, pk)
+            .ok_or_else(|| format!("wallet {pk} not in keystore"))?;
+        selected.push(kp);
+    }
+
+    bundler::execute_buy(&selected, &args.mint, args.sol, &cfg.network)
         .await
         .map_err(err)
 }
 
 #[tauri::command]
-pub async fn manual_dump(mint: String, state: State<'_, AppState>) -> Result<String> {
+pub async fn manual_dump(args: ManualSellArgs, state: State<'_, AppState>) -> Result<String> {
+    if args.wallet_pubkeys.is_empty() {
+        return Err("select at least one wallet".into());
+    }
+    if args.wallet_pubkeys.len() > 5 {
+        return Err("max 5 wallets per bundle".into());
+    }
     let cfg = state
         .config
         .lock()
@@ -294,7 +328,14 @@ pub async fn manual_dump(mint: String, state: State<'_, AppState>) -> Result<Str
         .await
         .clone()
         .ok_or("keystore locked")?;
-    bundler::execute_sell(&ks.snipers, &mint, &cfg.network)
+    let mut selected = Vec::with_capacity(args.wallet_pubkeys.len());
+    for pk in &args.wallet_pubkeys {
+        let kp = find_wallet(&ks, pk)
+            .ok_or_else(|| format!("wallet {pk} not in keystore"))?;
+        selected.push(kp);
+    }
+
+    bundler::execute_sell(&selected, &args.mint, &cfg.network)
         .await
         .map_err(err)
 }

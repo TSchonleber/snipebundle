@@ -8,6 +8,8 @@ import { Funding } from "./pages/Funding";
 import { ModeSelect } from "./pages/ModeSelect";
 import { Dashboard } from "./pages/Dashboard";
 import { Unlock } from "./pages/Unlock";
+import { Trade } from "./pages/Trade";
+import { Launch } from "./pages/Launch";
 import "@snipebundle/ui/styles.css";
 import "./styles.css";
 
@@ -22,6 +24,8 @@ const router = createBrowserRouter([
       { path: "funding", element: <Funding /> },
       { path: "mode", element: <ModeSelect /> },
       { path: "dashboard", element: <Dashboard /> },
+      { path: "trade", element: <Trade /> },
+      { path: "launch", element: <Launch /> },
     ],
   },
 ]);

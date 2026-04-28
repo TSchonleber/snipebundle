@@ -5,10 +5,10 @@ import {
   CardBody,
   MintFeedHeader,
   MintFeedRow,
-  StatusBadge,
   type EngineState,
 } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
+import { AppNav } from "../components/AppNav";
 
 export function Dashboard() {
   const [state, setState] = useState<EngineState | null>(null);
@@ -68,34 +68,25 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-border/60 bg-bg/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-4">
-            <span className="font-mono text-sm font-bold tracking-wider">
-              ▶ snipebundle
-            </span>
-            <StatusBadge status={status} />
-          </div>
-          <div className="flex items-center gap-2">
-            {state?.running ? (
-              <>
-                <Button size="sm" variant="secondary" onClick={togglePause}>
-                  {paused ? "Resume" : "Pause"}
-                </Button>
-                <Button size="sm" variant="danger" onClick={stop}>
-                  Stop
-                </Button>
-              </>
-            ) : (
-              <Button size="sm" onClick={start}>
-                GO LIVE
-              </Button>
-            )}
-          </div>
-        </div>
-      </header>
+      <AppNav status={status} />
+      <div className="mx-auto max-w-6xl px-6 py-4 flex justify-end gap-2">
+        {state?.running ? (
+          <>
+            <Button size="sm" variant="secondary" onClick={togglePause}>
+              {paused ? "Resume" : "Pause"}
+            </Button>
+            <Button size="sm" variant="danger" onClick={stop}>
+              Stop
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" onClick={start}>
+            GO LIVE
+          </Button>
+        )}
+      </div>
 
-      <div className="mx-auto max-w-6xl px-6 py-6">
+      <div className="mx-auto max-w-6xl px-6 pb-6">
         {error && (
           <Card className="mb-4">
             <CardBody className="text-danger text-sm">{error}</CardBody>

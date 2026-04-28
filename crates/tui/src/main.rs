@@ -117,7 +117,7 @@ fn init(cfg: &Config, override_count: Option<u32>) -> Result<()> {
     println!();
     confirm("Have you saved these securely? type YES to continue: ", "YES")?;
 
-    let ks = Keystore { master: Some(master), snipers };
+    let ks = Keystore { master: Some(master), snipers, dev_wallets: Vec::new() };
     keystore::save(&path, &ks, &pass)?;
     println!("\nkeystore written to {}", path.display());
     Ok(())
