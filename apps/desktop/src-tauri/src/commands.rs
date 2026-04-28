@@ -1,7 +1,7 @@
 use crate::state::{AppState, EngineHandle};
 use serde::{Deserialize, Serialize};
 use snipebundle_core::{
-    balance, bundler,
+    balance, bundler, exit,
     funding::{self, FanOutResult},
     keystore::{self, Keystore, StoredKeypair},
     launch::{self, LaunchMetadata, LaunchResult},
@@ -329,9 +329,11 @@ pub async fn manual_snipe(
         .resolve(&args.wallet_pubkeys)
         .map_err(err)?;
 
-    bundler::execute_buy_per_wallet(&selected, &args.mint, &amounts, &cfg.network)
+    let bundle_id = bundler::execute_buy_per_wallet(&selected, &args.mint, &amounts, &cfg.network)
         .await
-        .map_err(err)
+        .map_err(err)?;
+    spawn_universal_wallet_exits(selected, args.mint.clone(), cfg);
+    Ok(bundle_id)
 }
 
 #[tauri::command]
@@ -434,6 +436,15 @@ pub async fn delete_wallet(
     }
     let path = keystore::keystore_path().map_err(err)?;
     keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+
+    let cfg_path = state.config_path.lock().await.clone();
+    let mut cfg_guard = state.config.lock().await;
+    if let Some(cfg) = cfg_guard.as_mut() {
+        if cfg.wallet_exit_rules.remove(&args.pubkey).is_some() {
+            save_to_disk(&cfg_path, cfg).map_err(err)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -544,7 +555,7 @@ pub async fn launch_token(
         co_buyers.push((kp, cb.sol));
     }
 
-    launch::execute_launch(
+    let result = launch::execute_launch(
         &dev,
         &args.metadata,
         &metadata_uri,
@@ -553,7 +564,16 @@ pub async fn launch_token(
         &cfg.network,
     )
     .await
-    .map_err(err)
+    .map_err(err)?;
+
+    let mut exit_wallets = Vec::new();
+    if args.dev_buy_sol > 0.0 {
+        exit_wallets.push(dev);
+    }
+    exit_wallets.extend(co_buyers.iter().map(|(wallet, _)| wallet.clone()));
+    spawn_universal_wallet_exits(exit_wallets, result.mint.clone(), cfg);
+
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -612,6 +632,41 @@ fn find_wallet(ks: &Keystore, pubkey: &str) -> Option<StoredKeypair> {
         .chain(ks.dev_wallets.iter())
         .find(|w| w.pubkey == pubkey)
         .cloned()
+}
+
+fn spawn_universal_wallet_exits(wallets: Vec<StoredKeypair>, mint: String, cfg: Config) {
+    if wallets.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let wallet_rules = wallets
+            .into_iter()
+            .map(|wallet| {
+                let rule = cfg.exit_for_wallet(&wallet.pubkey);
+                (wallet, rule)
+            })
+            .collect::<Vec<_>>();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let price_state = Arc::new(RwLock::new(exit::PositionPrice::default()));
+        let outcomes = exit::watch_wallets_with_pricing(
+            wallet_rules,
+            mint.clone(),
+            cfg.network.clone(),
+            cancel_rx,
+            price_state,
+        )
+        .await;
+        let failed = outcomes
+            .iter()
+            .filter(|result| matches!(result.outcome, exit::ExitOutcome::Failed(_)))
+            .count();
+        tracing::info!(
+            mint = %mint,
+            wallets = outcomes.len(),
+            failed,
+            "universal wallet exits completed"
+        );
+    });
 }
 
 fn save_to_disk(path: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {

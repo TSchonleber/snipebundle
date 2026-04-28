@@ -18,6 +18,33 @@ pub enum ExitOutcome {
     Failed(String),
 }
 
+impl ExitOutcome {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ExitOutcome::TakeProfit { .. } => "take-profit",
+            ExitOutcome::StopLoss { .. } => "stop-loss",
+            ExitOutcome::TimeExit { .. } => "time-exit",
+            ExitOutcome::ManualDump => "manual",
+            ExitOutcome::Failed(_) => "failed",
+        }
+    }
+
+    pub fn realized_pct(&self) -> Option<f64> {
+        match self {
+            ExitOutcome::TakeProfit { realized_pct } => Some(*realized_pct),
+            ExitOutcome::StopLoss { realized_pct } => Some(*realized_pct),
+            ExitOutcome::TimeExit { final_pct } => *final_pct,
+            ExitOutcome::ManualDump | ExitOutcome::Failed(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WalletExitResult {
+    pub wallet_pubkey: String,
+    pub outcome: ExitOutcome,
+}
+
 /// Per-position price tracker. Updated by the watcher, read by the engine
 /// for live P&L surfacing.
 #[derive(Debug, Default, Clone)]
@@ -25,6 +52,53 @@ pub struct PositionPrice {
     pub entry_price: Option<f64>,
     pub last_price: Option<f64>,
     pub unrealized_pct: Option<f64>,
+}
+
+/// Arm each wallet with its own TP/SL/max-hold config. This intentionally
+/// runs one watcher per wallet because each wallet may have a different rule
+/// and therefore a different exit time.
+pub async fn watch_wallets_with_pricing(
+    wallets: Vec<(StoredKeypair, ExitConfig)>,
+    mint: String,
+    net: NetworkConfig,
+    cancel: watch::Receiver<bool>,
+    price_state: Arc<RwLock<PositionPrice>>,
+) -> Vec<WalletExitResult> {
+    let mut handles = Vec::with_capacity(wallets.len());
+    for (wallet, cfg) in wallets {
+        let wallet_pubkey = wallet.pubkey.clone();
+        let wallet_mint = mint.clone();
+        let wallet_net = net.clone();
+        let wallet_cancel = cancel.clone();
+        let wallet_price = Arc::clone(&price_state);
+        handles.push(tokio::spawn(async move {
+            let outcome = watch_with_pricing(
+                vec![wallet],
+                wallet_mint,
+                cfg,
+                wallet_net,
+                wallet_cancel,
+                wallet_price,
+            )
+            .await;
+            WalletExitResult {
+                wallet_pubkey,
+                outcome,
+            }
+        }));
+    }
+
+    let mut results = Vec::with_capacity(handles.len());
+    for handle in handles {
+        match handle.await {
+            Ok(result) => results.push(result),
+            Err(e) => results.push(WalletExitResult {
+                wallet_pubkey: "unknown".into(),
+                outcome: ExitOutcome::Failed(format!("wallet exit task failed: {e}")),
+            }),
+        }
+    }
+    results
 }
 
 /// Watch a position's price feed and fire the sell bundle when whichever of
@@ -49,8 +123,7 @@ pub async fn watch_with_pricing(
         "exit watcher armed (TP/SL/time)"
     );
 
-    let snipe_set: HashSet<String> =
-        snipers.iter().map(|s| s.pubkey.clone()).collect();
+    let snipe_set: HashSet<String> = snipers.iter().map(|s| s.pubkey.clone()).collect();
 
     let (trade_tx, mut trade_rx) = mpsc::channel::<TradeUpdate>(256);
     let (price_cancel_tx, price_cancel_rx) = watch::channel(false);
@@ -86,6 +159,13 @@ pub async fn watch_with_pricing(
                         && snipe_set.contains(&t.trader_pubkey)
                         && t.tx_type.eq_ignore_ascii_case("buy")
                     {
+                        s.entry_price = Some(price);
+                        entry = Some(price);
+                    } else if s.entry_price.is_none() && entry.is_none() {
+                        // Manual/launch watchers can arm after the wallet's
+                        // buy print has already passed. Use the first price
+                        // we see as the risk-rule reference instead of
+                        // leaving TP/SL inactive until the hold timer fires.
                         s.entry_price = Some(price);
                         entry = Some(price);
                     } else if entry.is_none() {

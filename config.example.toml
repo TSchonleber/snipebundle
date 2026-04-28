@@ -28,6 +28,14 @@ take_profit_pct = 50.0
 stop_loss_pct = 30.0
 max_hold_seconds = 60     # capped at 600
 
+[wallet_exit_rules]
+# Per-wallet app-wide overrides are written by the Wallets tab.
+# Example:
+# [wallet_exit_rules."9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"]
+# take_profit_pct = 75.0
+# stop_loss_pct = 25.0
+# max_hold_seconds = 45
+
 [network]
 rpc_url = "https://api.mainnet-beta.solana.com"
 pumpportal_ws = "wss://pumpportal.fun/api/data"

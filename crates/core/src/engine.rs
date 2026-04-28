@@ -7,7 +7,7 @@ use crate::listener;
 use crate::types::{MintEvent, TriggerSource};
 use anyhow::Result;
 use serde::Serialize;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 use tracing::warn;
@@ -50,11 +50,11 @@ pub struct ClosedPosition {
     pub bundle_id: Option<String>,
     pub opened_at_ms: i64,
     pub closed_at_ms: i64,
-    pub exit_kind: String,        // "take-profit" | "stop-loss" | "time-exit" | "manual" | "failed"
+    pub exit_kind: String, // "take-profit" | "stop-loss" | "time-exit" | "manual" | "failed"
     pub realized_pct: Option<f64>,
     pub entry_price: Option<f64>,
     pub last_price: Option<f64>,
-    pub status_label: String,     // human-readable summary, same as ActivePosition.status had
+    pub status_label: String, // human-readable summary, same as ActivePosition.status had
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -183,18 +183,24 @@ impl Engine {
         let Some(trigger) = trigger else { return };
 
         if *paused_rx.borrow() {
-            self.note(format!("paused — skipped match {}", short(&ev.mint))).await;
+            self.note(format!("paused — skipped match {}", short(&ev.mint)))
+                .await;
             return;
         }
 
         if last_snipe_at.elapsed().as_millis() < SNIPE_COOLDOWN_MS as u128 {
-            self.note(format!("cooldown — skipped {}", short(&ev.mint))).await;
+            self.note(format!("cooldown — skipped {}", short(&ev.mint)))
+                .await;
             return;
         }
 
         let active = self.state.read().await.positions.len();
         if active >= MAX_CONCURRENT_POSITIONS {
-            self.note(format!("max positions reached — skipped {}", short(&ev.mint))).await;
+            self.note(format!(
+                "max positions reached — skipped {}",
+                short(&ev.mint)
+            ))
+            .await;
             return;
         }
 
@@ -278,23 +284,21 @@ impl Engine {
                         if let Some(p) = s.positions.iter_mut().find(|p| p.mint == mint) {
                             p.bundle_id = Some(bundle_id.clone());
                             p.status = format!(
-                                "buy live ({}…) — TP/SL/time armed",
+                                "buy live ({}…) — wallet exits armed",
                                 &bundle_id[..8.min(bundle_id.len())]
                             );
                         }
                     }
 
                     let (_cancel_tx, cancel_rx) = watch::channel(false);
-                    let price_state =
-                        Arc::new(RwLock::new(exit::PositionPrice::default()));
+                    let price_state = Arc::new(RwLock::new(exit::PositionPrice::default()));
                     let mint_for_pump = mint.clone();
                     let pump_state = Arc::clone(&state);
                     let pump_price = Arc::clone(&price_state);
                     let pump_handle = tokio::spawn(async move {
                         let mut last_seen: Option<f64> = None;
                         loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(500))
-                                .await;
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                             let snap = pump_price.read().await.clone();
                             if snap.unrealized_pct == last_seen {
                                 continue;
@@ -313,10 +317,23 @@ impl Engine {
                         }
                     });
 
-                    let outcome = exit::watch_with_pricing(
-                        snipers.clone(),
+                    let wallet_rules = snipers
+                        .iter()
+                        .cloned()
+                        .map(|wallet| {
+                            let rule = cfg.exit_for_wallet(&wallet.pubkey);
+                            (wallet, rule)
+                        })
+                        .collect::<Vec<_>>();
+                    let amounts_by_wallet = snipers
+                        .iter()
+                        .zip(amounts.iter())
+                        .map(|(wallet, amount)| (wallet.pubkey.clone(), *amount))
+                        .collect::<HashMap<_, _>>();
+
+                    let wallet_outcomes = exit::watch_wallets_with_pricing(
+                        wallet_rules,
                         mint.clone(),
-                        cfg.exit.clone(),
                         cfg.network.clone(),
                         cancel_rx,
                         Arc::clone(&price_state),
@@ -325,45 +342,17 @@ impl Engine {
 
                     pump_handle.abort();
 
-                    let (label, kind, realized_pct) = match &outcome {
-                        exit::ExitOutcome::TakeProfit { realized_pct } => (
-                            format!("take-profit +{:.1}%", realized_pct),
-                            "take-profit",
-                            Some(*realized_pct),
-                        ),
-                        exit::ExitOutcome::StopLoss { realized_pct } => (
-                            format!("stop-loss {:.1}%", realized_pct),
-                            "stop-loss",
-                            Some(*realized_pct),
-                        ),
-                        exit::ExitOutcome::TimeExit { final_pct } => (
-                            match final_pct {
-                                Some(p) => format!("time-exit ({:+.1}%)", p),
-                                None => "time-exit".into(),
-                            },
-                            "time-exit",
-                            *final_pct,
-                        ),
-                        exit::ExitOutcome::ManualDump => {
-                            ("manual-dump".into(), "manual", None)
-                        }
-                        exit::ExitOutcome::Failed(e) => {
-                            (format!("exit-failed: {e}"), "failed", None)
-                        }
-                    };
+                    let (label, kind, realized_pct) =
+                        summarize_wallet_exits(&wallet_outcomes, &amounts_by_wallet);
 
                     let mut s = state.write().await;
 
                     // Snapshot the active position so we can move it to closed.
-                    let snapshot = s
-                        .positions
-                        .iter()
-                        .find(|p| p.mint == mint)
-                        .cloned();
+                    let snapshot = s.positions.iter().find(|p| p.mint == mint).cloned();
 
                     if let Some(active) = snapshot {
-                        let realized_sol = realized_pct
-                            .map(|pct| active.entry_total_sol * pct / 100.0);
+                        let realized_sol =
+                            realized_pct.map(|pct| active.entry_total_sol * pct / 100.0);
                         if let Some(pct) = realized_pct {
                             if pct >= 0.0 {
                                 s.realized_wins += 1;
@@ -395,8 +384,7 @@ impl Engine {
                         s.positions.retain(|p| p.mint != mint);
                     }
 
-                    s.last_message =
-                        format!("position closed {} ({label})", short(&mint));
+                    s.last_message = format!("position closed {} ({label})", short(&mint));
                 }
                 Err(e) => {
                     let mut s = state.write().await;
@@ -419,4 +407,83 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn summarize_wallet_exits(
+    results: &[exit::WalletExitResult],
+    amounts_by_wallet: &HashMap<String, f64>,
+) -> (String, &'static str, Option<f64>) {
+    if results.is_empty() {
+        return ("exit-failed: no wallet results".into(), "failed", None);
+    }
+
+    let mut take_profit = 0usize;
+    let mut stop_loss = 0usize;
+    let mut time_exit = 0usize;
+    let mut manual = 0usize;
+    let mut failed = 0usize;
+    let mut weighted_pct = 0.0;
+    let mut realized_weight = 0.0;
+
+    for result in results {
+        match result.outcome.kind() {
+            "take-profit" => take_profit += 1,
+            "stop-loss" => stop_loss += 1,
+            "time-exit" => time_exit += 1,
+            "manual" => manual += 1,
+            "failed" => failed += 1,
+            _ => {}
+        }
+        if let Some(pct) = result.outcome.realized_pct() {
+            let weight = amounts_by_wallet
+                .get(&result.wallet_pubkey)
+                .copied()
+                .unwrap_or(1.0)
+                .max(0.0);
+            weighted_pct += pct * weight;
+            realized_weight += weight;
+        }
+    }
+
+    let realized_pct = if realized_weight > 0.0 {
+        Some(weighted_pct / realized_weight)
+    } else {
+        None
+    };
+
+    let mut parts = Vec::new();
+    if take_profit > 0 {
+        parts.push(format!("{take_profit} TP"));
+    }
+    if stop_loss > 0 {
+        parts.push(format!("{stop_loss} SL"));
+    }
+    if time_exit > 0 {
+        parts.push(format!("{time_exit} hold"));
+    }
+    if manual > 0 {
+        parts.push(format!("{manual} manual"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+
+    let nonzero_kinds = [take_profit, stop_loss, time_exit, manual, failed]
+        .iter()
+        .filter(|count| **count > 0)
+        .count();
+    let kind = if nonzero_kinds == 1 {
+        results[0].outcome.kind()
+    } else if failed == results.len() {
+        "failed"
+    } else {
+        "mixed"
+    };
+
+    let label = match realized_pct {
+        Some(pct) => format!("wallet exits: {} ({:+.1}% avg)", parts.join(", "), pct),
+        None => format!("wallet exits: {}", parts.join(", ")),
+    };
+
+    (label, kind, realized_pct)
 }

@@ -342,6 +342,7 @@ function ClosedPositionsLog({ state }: { state: EngineState | null }) {
             "time-exit": "text-fg-muted",
             manual: "text-fg-muted",
             failed: "text-danger",
+            mixed: "text-warn",
           };
           return (
             <div key={`${p.mint}-${p.closed_at_ms}`} className="px-4 py-2.5">

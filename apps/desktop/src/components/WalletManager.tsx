@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Card,
@@ -6,7 +6,7 @@ import {
   CardHeader,
   type WalletInfo,
 } from "@snipebundle/ui";
-import { ipc } from "../lib/ipc";
+import { ipc, type AppConfig, type ExitRule } from "../lib/ipc";
 
 interface Props {
   wallets: WalletInfo[];
@@ -14,6 +14,7 @@ interface Props {
 }
 
 type Mode = null | "add" | "delete";
+type RuleDraft = { tp: string; sl: string; hold: string };
 
 export function WalletManager({ wallets, onChanged }: Props) {
   const [mode, setMode] = useState<Mode>(null);
@@ -22,11 +23,37 @@ export function WalletManager({ wallets, onChanged }: Props) {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<AppConfig | null>(null);
+  const [ruleDrafts, setRuleDrafts] = useState<Record<string, RuleDraft>>({});
+  const [savingRule, setSavingRule] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{
     label: string;
     pubkey: string;
     secret_b58: string;
   } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    ipc
+      .loadConfig()
+      .then((next) => {
+        if (!mounted) return;
+        setCfg(next);
+        const drafts: Record<string, RuleDraft> = {};
+        for (const wallet of wallets) {
+          drafts[wallet.pubkey] = exitRuleToDraft(
+            next.wallet_exit_rules?.[wallet.pubkey] ?? next.exit,
+          );
+        }
+        setRuleDrafts(drafts);
+      })
+      .catch((e) => {
+        if (mounted) setError(String(e));
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [wallets]);
 
   async function doAdd() {
     setError(null);
@@ -60,6 +87,68 @@ export function WalletManager({ wallets, onChanged }: Props) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function updateRuleDraft(pubkey: string, patch: Partial<RuleDraft>) {
+    setRuleDrafts((drafts) => ({
+      ...drafts,
+      [pubkey]: {
+        ...(drafts[pubkey] ?? exitRuleToDraft(cfg?.exit ?? defaultExitRule)),
+        ...patch,
+      },
+    }));
+  }
+
+  async function saveWalletRule(pubkey: string) {
+    setError(null);
+    if (!cfg) return setError("Config not loaded.");
+    const parsed = parseRuleDraft(ruleDrafts[pubkey]);
+    if (typeof parsed === "string") return setError(parsed);
+
+    const next: AppConfig = {
+      ...cfg,
+      wallet_exit_rules: {
+        ...(cfg.wallet_exit_rules ?? {}),
+        [pubkey]: parsed,
+      },
+    };
+
+    setSavingRule(pubkey);
+    try {
+      await ipc.saveConfig(next);
+      setCfg(next);
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingRule(null);
+    }
+  }
+
+  async function resetWalletRule(pubkey: string) {
+    setError(null);
+    if (!cfg) return setError("Config not loaded.");
+    const nextRules = { ...(cfg.wallet_exit_rules ?? {}) };
+    delete nextRules[pubkey];
+    const next: AppConfig = {
+      ...cfg,
+      wallet_exit_rules: nextRules,
+    };
+
+    setSavingRule(pubkey);
+    try {
+      await ipc.saveConfig(next);
+      setCfg(next);
+      setRuleDrafts((drafts) => ({
+        ...drafts,
+        [pubkey]: exitRuleToDraft(next.exit),
+      }));
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingRule(null);
     }
   }
 
@@ -200,43 +289,157 @@ export function WalletManager({ wallets, onChanged }: Props) {
       )}
 
       <CardBody>
-        <ul className="space-y-1.5">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold">App-wide wallet exits</h4>
+            <p className="mt-1 text-xs text-fg-subtle">
+              TP / SL / hold duration is saved per wallet.
+            </p>
+          </div>
+          {cfg && (
+            <div className="text-right text-[10px] text-fg-subtle">
+              Global: {cfg.exit.take_profit_pct}% / {cfg.exit.stop_loss_pct}% /{" "}
+              {cfg.exit.max_hold_seconds}s
+            </div>
+          )}
+        </div>
+        <ul className="space-y-2">
           {wallets.map((w) => {
             const deletable = w.label !== "master";
+            const custom = Boolean(cfg?.wallet_exit_rules?.[w.pubkey]);
+            const draft =
+              ruleDrafts[w.pubkey] ??
+              exitRuleToDraft(cfg?.wallet_exit_rules?.[w.pubkey] ?? cfg?.exit ?? defaultExitRule);
             return (
               <li
                 key={w.pubkey}
-                className="flex items-center gap-3 rounded-lg border border-border bg-bg-subtle px-3 py-2"
+                className="rounded-lg border border-border bg-bg-subtle p-3"
               >
-                <span className="font-mono text-xs uppercase tracking-wider text-fg-muted w-24 shrink-0">
-                  {w.label}
-                </span>
-                <code className="flex-1 truncate font-mono text-[11px] text-fg-subtle">
-                  {w.pubkey}
-                </code>
-                {deletable ? (
-                  <button
-                    onClick={() => {
-                      setMode("delete");
-                      setTarget(w);
-                      setError(null);
-                    }}
-                    className="text-xs text-danger/70 hover:text-danger px-2 py-1"
-                    disabled={mode !== null}
-                  >
-                    delete
-                  </button>
-                ) : (
-                  <span className="text-xs text-fg-subtle px-2 py-1">
-                    (master)
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-xs uppercase tracking-wider text-fg-muted w-24 shrink-0">
+                    {w.label}
                   </span>
-                )}
+                  <code className="flex-1 truncate font-mono text-[11px] text-fg-subtle">
+                    {w.pubkey}
+                  </code>
+                  <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
+                    {custom ? "custom" : "global"}
+                  </span>
+                  {deletable ? (
+                    <button
+                      onClick={() => {
+                        setMode("delete");
+                        setTarget(w);
+                        setError(null);
+                      }}
+                      className="text-xs text-danger/70 hover:text-danger px-2 py-1"
+                      disabled={mode !== null}
+                    >
+                      delete
+                    </button>
+                  ) : (
+                    <span className="text-xs text-fg-subtle px-2 py-1">
+                      (master)
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_1fr_auto_auto]">
+                  <RuleInput
+                    label="TP %"
+                    value={draft.tp}
+                    onChange={(value) => updateRuleDraft(w.pubkey, { tp: value })}
+                  />
+                  <RuleInput
+                    label="SL %"
+                    value={draft.sl}
+                    onChange={(value) => updateRuleDraft(w.pubkey, { sl: value })}
+                  />
+                  <RuleInput
+                    label="Hold s"
+                    value={draft.hold}
+                    onChange={(value) => updateRuleDraft(w.pubkey, { hold: value })}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => saveWalletRule(w.pubkey)}
+                    disabled={savingRule === w.pubkey}
+                    className="sm:self-end"
+                  >
+                    {savingRule === w.pubkey ? "Saving…" : "Save"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => resetWalletRule(w.pubkey)}
+                    disabled={savingRule === w.pubkey || !custom}
+                    className="sm:self-end"
+                  >
+                    Global
+                  </Button>
+                </div>
               </li>
             );
           })}
         </ul>
       </CardBody>
     </Card>
+  );
+}
+
+const defaultExitRule: ExitRule = {
+  take_profit_pct: 50,
+  stop_loss_pct: 30,
+  max_hold_seconds: 60,
+};
+
+function exitRuleToDraft(rule: ExitRule): RuleDraft {
+  return {
+    tp: String(rule.take_profit_pct),
+    sl: String(rule.stop_loss_pct),
+    hold: String(rule.max_hold_seconds),
+  };
+}
+
+function parseRuleDraft(draft: RuleDraft | undefined): ExitRule | string {
+  if (!draft) return "Set TP, SL, and hold duration first.";
+  const tp = Number.parseFloat(draft.tp);
+  const sl = Number.parseFloat(draft.sl);
+  const hold = Number.parseInt(draft.hold, 10);
+  if (!Number.isFinite(tp) || tp <= 0) return "TP % must be > 0.";
+  if (!Number.isFinite(sl) || sl <= 0) return "SL % must be > 0.";
+  if (!Number.isFinite(hold) || hold < 1 || hold > 600) {
+    return "Hold duration must be 1..=600 seconds.";
+  }
+  return {
+    take_profit_pct: tp,
+    stop_loss_pct: sl,
+    max_hold_seconds: hold,
+  };
+}
+
+function RuleInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] uppercase tracking-wider text-fg-subtle">
+        {label}
+      </span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-border bg-bg px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+      />
+    </label>
   );
 }
 

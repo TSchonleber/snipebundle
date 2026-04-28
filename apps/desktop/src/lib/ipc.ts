@@ -33,6 +33,12 @@ export interface CoBuyerSpec {
 
 // --- Config (mirrors crates/core/src/config.rs) ----------------------------
 
+export interface ExitRule {
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  max_hold_seconds: number;
+}
+
 export interface AppConfig {
   wallets: {
     count: number;
@@ -56,11 +62,8 @@ export interface AppConfig {
     dev_wallets: string[];
     bypass_filters: boolean;
   };
-  exit: {
-    take_profit_pct: number;
-    stop_loss_pct: number;
-    max_hold_seconds: number;
-  };
+  exit: ExitRule;
+  wallet_exit_rules: Record<string, ExitRule>;
   network: {
     rpc_url: string;
     pumpportal_ws: string;

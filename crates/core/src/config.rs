@@ -1,6 +1,7 @@
 use crate::amounts::AmountStrategy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,6 +11,8 @@ pub struct Config {
     pub auto: AutoFilters,
     pub targeted: TargetedConfig,
     pub exit: ExitConfig,
+    #[serde(default)]
+    pub wallet_exit_rules: HashMap<String, ExitConfig>,
     pub network: NetworkConfig,
 }
 
@@ -107,32 +110,91 @@ impl Config {
             self.wallets.max_sol_per_wallet > 0.0 && self.wallets.max_sol_per_wallet <= 5.0,
             "wallets.max_sol_per_wallet must be 0 < x <= 5.0"
         );
-        anyhow::ensure!(
-            self.exit.max_hold_seconds <= 600,
-            "exit.max_hold_seconds capped at 600 (10 min)"
-        );
+        self.exit.validate("exit")?;
+        for (pubkey, rule) in &self.wallet_exit_rules {
+            rule.validate(&format!("wallet_exit_rules.{pubkey}"))?;
+        }
         anyhow::ensure!(
             self.trigger.sol_per_snipe <= self.wallets.max_sol_per_wallet,
             "trigger.sol_per_snipe cannot exceed wallets.max_sol_per_wallet"
         );
         Ok(())
     }
+
+    pub fn exit_for_wallet(&self, pubkey: &str) -> ExitConfig {
+        self.wallet_exit_rules
+            .get(pubkey)
+            .cloned()
+            .unwrap_or_else(|| self.exit.clone())
+    }
 }
 
-fn default_wallet_count() -> u32 { 5 }
-fn default_max_sol_per_wallet() -> f64 { 1.0 }
-fn default_master_reserve() -> f64 { 0.05 }
-fn default_true() -> bool { true }
-fn default_sol_per_snipe() -> f64 { 0.5 }
-fn default_min_dev_buy() -> f64 { 5.0 }
-fn default_max_entry_mc() -> f64 { 50.0 }
-fn default_take_profit() -> f64 { 50.0 }
-fn default_stop_loss() -> f64 { 30.0 }
-fn default_max_hold() -> u64 { 60 }
-fn default_rpc() -> String { "https://api.mainnet-beta.solana.com".into() }
-fn default_ws() -> String { "wss://pumpportal.fun/api/data".into() }
-fn default_trade_local() -> String { "https://pumpportal.fun/api/trade-local".into() }
-fn default_jito() -> String { "https://mainnet.block-engine.jito.wtf/api/v1/bundles".into() }
-fn default_jito_tip() -> f64 { 0.001 }
-fn default_priority_fee() -> f64 { 0.0001 }
-fn default_slippage() -> u32 { 5000 }
+impl ExitConfig {
+    pub fn validate(&self, label: &str) -> Result<()> {
+        anyhow::ensure!(
+            self.take_profit_pct > 0.0,
+            "{label}.take_profit_pct must be > 0"
+        );
+        anyhow::ensure!(
+            self.stop_loss_pct > 0.0,
+            "{label}.stop_loss_pct must be > 0"
+        );
+        anyhow::ensure!(
+            self.max_hold_seconds >= 1 && self.max_hold_seconds <= 600,
+            "{label}.max_hold_seconds must be 1..=600"
+        );
+        Ok(())
+    }
+}
+
+fn default_wallet_count() -> u32 {
+    5
+}
+fn default_max_sol_per_wallet() -> f64 {
+    1.0
+}
+fn default_master_reserve() -> f64 {
+    0.05
+}
+fn default_true() -> bool {
+    true
+}
+fn default_sol_per_snipe() -> f64 {
+    0.5
+}
+fn default_min_dev_buy() -> f64 {
+    5.0
+}
+fn default_max_entry_mc() -> f64 {
+    50.0
+}
+fn default_take_profit() -> f64 {
+    50.0
+}
+fn default_stop_loss() -> f64 {
+    30.0
+}
+fn default_max_hold() -> u64 {
+    60
+}
+fn default_rpc() -> String {
+    "https://api.mainnet-beta.solana.com".into()
+}
+fn default_ws() -> String {
+    "wss://pumpportal.fun/api/data".into()
+}
+fn default_trade_local() -> String {
+    "https://pumpportal.fun/api/trade-local".into()
+}
+fn default_jito() -> String {
+    "https://mainnet.block-engine.jito.wtf/api/v1/bundles".into()
+}
+fn default_jito_tip() -> f64 {
+    0.001
+}
+fn default_priority_fee() -> f64 {
+    0.0001
+}
+fn default_slippage() -> u32 {
+    5000
+}
