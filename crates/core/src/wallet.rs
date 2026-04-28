@@ -15,7 +15,7 @@ pub fn from_stored(stored: &StoredKeypair) -> Result<Keypair> {
     let bytes = bs58::decode(&stored.secret_b58)
         .into_vec()
         .map_err(|e| anyhow::anyhow!("decode b58 secret: {e}"))?;
-    Keypair::from_bytes(&bytes).map_err(|e| anyhow::anyhow!("keypair from bytes: {e}"))
+    Keypair::try_from(bytes.as_slice()).map_err(|e| anyhow::anyhow!("keypair from bytes: {e}"))
 }
 
 pub fn generate_snipers(n: u32) -> Vec<StoredKeypair> {
