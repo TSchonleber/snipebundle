@@ -224,6 +224,124 @@ pub async fn start_engine(state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
+/// Idempotent engine starter — succeeds if already running, starts otherwise.
+/// Used by the Launch flow so co-buyer positions can be tracked without
+/// requiring the user to also click GO LIVE on the Sniper tab.
+async fn ensure_engine_running_inner(state: &AppState) -> Result<()> {
+    let mut engine_guard = state.engine.lock().await;
+    if engine_guard.is_some() {
+        return Ok(());
+    }
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+
+    let engine = Arc::new(Engine::new(cfg, ks));
+    let engine_state: Arc<RwLock<EngineState>> = engine.state_handle();
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (paused_tx, paused_rx) = watch::channel(false);
+
+    let engine_clone = Arc::clone(&engine);
+    tokio::spawn(async move {
+        if let Err(e) = engine_clone.run(cancel_rx, paused_rx).await {
+            tracing::warn!(error = %e, "engine exited with error");
+        }
+    });
+
+    *engine_guard = Some(EngineHandle {
+        engine,
+        state: engine_state,
+        cancel_tx,
+        paused_tx,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ensure_engine_running(state: State<'_, AppState>) -> Result<()> {
+    ensure_engine_running_inner(&state).await
+}
+
+#[derive(Deserialize)]
+pub struct RegisterLaunchPositionArgs {
+    pub mint: String,
+    pub wallet_pubkeys: Vec<String>,
+    pub entry_total_sol: f64,
+    pub bundle_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn register_launch_position(
+    args: RegisterLaunchPositionArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    ensure_engine_running_inner(&state).await?;
+
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    let mut snipers = Vec::with_capacity(args.wallet_pubkeys.len());
+    for pk in &args.wallet_pubkeys {
+        let kp = find_wallet(&ks, pk)
+            .ok_or_else(|| format!("co-buyer wallet {pk} not in keystore"))?;
+        snipers.push(kp);
+    }
+
+    let engine = {
+        let guard = state.engine.lock().await;
+        let handle = guard.as_ref().ok_or("engine not running")?;
+        Arc::clone(&handle.engine)
+    };
+    engine
+        .register_launch_position(
+            args.mint,
+            snipers,
+            args.entry_total_sol,
+            args.bundle_id,
+        )
+        .await;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct CloseLaunchPositionArgs {
+    pub mint: String,
+    #[serde(default = "default_close_label")]
+    pub label: String,
+}
+
+fn default_close_label() -> String {
+    "manual sell".into()
+}
+
+#[tauri::command]
+pub async fn close_launch_position(
+    args: CloseLaunchPositionArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let engine = {
+        let guard = state.engine.lock().await;
+        match guard.as_ref() {
+            Some(h) => Arc::clone(&h.engine),
+            None => return Ok(()), // nothing to close, engine never started
+        }
+    };
+    engine.close_launch_position(&args.mint, &args.label).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn stop_engine(state: State<'_, AppState>) -> Result<()> {
     let mut engine_guard = state.engine.lock().await;

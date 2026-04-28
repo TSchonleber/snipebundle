@@ -164,4 +164,15 @@ export const ipc = {
   deleteWallet: (pubkey: string, passphrase: string) =>
     invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
   getTrending: () => invoke<TrendingItem[]>("get_trending"),
+  ensureEngineRunning: () => invoke<void>("ensure_engine_running"),
+  registerLaunchPosition: (args: {
+    mint: string;
+    wallet_pubkeys: string[];
+    entry_total_sol: number;
+    bundle_id: string | null;
+  }) => invoke<void>("register_launch_position", { args }),
+  closeLaunchPosition: (mint: string, label?: string) =>
+    invoke<void>("close_launch_position", {
+      args: { mint, label: label ?? "manual sell" },
+    }),
 };

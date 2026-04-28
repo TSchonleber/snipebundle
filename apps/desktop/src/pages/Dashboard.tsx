@@ -145,11 +145,25 @@ export function Dashboard() {
                         : "text-danger";
                   const pctLabel =
                     pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+                  const kind = p.kind ?? "sniper";
+                  const kindBadge =
+                    kind === "launch"
+                      ? "border-warn/40 bg-warn/10 text-warn"
+                      : kind === "manual"
+                        ? "border-fg-subtle/40 bg-bg-raised text-fg-muted"
+                        : "border-accent/40 bg-accent/10 text-accent";
                   return (
                     <div key={p.mint} className="px-4 py-3">
                       <div className="flex items-center justify-between">
-                        <div className="font-mono text-sm">
-                          {p.mint.slice(0, 12)}…
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${kindBadge}`}
+                          >
+                            {kind}
+                          </span>
+                          <div className="font-mono text-sm">
+                            {p.mint.slice(0, 12)}…
+                          </div>
                         </div>
                         <div className="flex items-center gap-3">
                           <span

@@ -166,6 +166,23 @@ export function Launch() {
         coBuyerWallets,
       });
       setSellPicked(coBuyerWallets);
+
+      // Surface co-buyer position(s) in the Sniper dashboard. Engine
+      // auto-starts if it wasn't already so price tracking works.
+      if (coBuyerWallets.length > 0) {
+        try {
+          await ipc.registerLaunchPosition({
+            mint: res.mint,
+            wallet_pubkeys: coBuyerWallets,
+            entry_total_sol: coBuyers.reduce((s, cb) => s + cb.sol, 0),
+            bundle_id: res.bundle_id,
+          });
+        } catch (e) {
+          // Non-fatal — launch succeeded, tracking failed.
+          // eslint-disable-next-line no-console
+          console.warn("register_launch_position failed", e);
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -201,6 +218,23 @@ export function Launch() {
         });
         submitted.push(id);
         setSellBundleIds([...submitted]);
+      }
+      // If we sold a meaningful chunk including all co-buyers, mark the
+      // launch position as closed in the engine state. Selling only some
+      // wallets keeps it open.
+      const fullExit =
+        sellTarget.coBuyerWallets.every((pk) => sellPicked.includes(pk)) &&
+        sellPercent === 100;
+      if (fullExit) {
+        try {
+          await ipc.closeLaunchPosition(
+            sellTarget.mint,
+            `manual sell ${sellPercent}%`,
+          );
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("close_launch_position failed", e);
+        }
       }
     } catch (e) {
       setSellError(String(e));

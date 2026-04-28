@@ -9,6 +9,7 @@ export type {
   FeedEntry,
   ActivePosition,
   ClosedPosition,
+  PositionKind,
   EngineState,
   WalletInfo,
   WalletWithSecret,

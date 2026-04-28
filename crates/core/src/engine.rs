@@ -2,12 +2,12 @@ use crate::bundler;
 use crate::config::Config;
 use crate::exit;
 use crate::filters;
-use crate::keystore::Keystore;
+use crate::keystore::{Keystore, StoredKeypair};
 use crate::listener;
 use crate::types::{MintEvent, TriggerSource};
 use anyhow::Result;
-use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
 use tracing::warn;
@@ -27,12 +27,34 @@ pub struct FeedEntry {
     pub at_ms: i64,
 }
 
+/// What initiated a position. Determines display grouping in the Dashboard
+/// and (for `Launch`) suppresses script-fired auto-exits per decision 146.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PositionKind {
+    Sniper,
+    Launch,
+    Manual,
+}
+
+impl Default for PositionKind {
+    fn default() -> Self {
+        PositionKind::Sniper
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ActivePosition {
     pub mint: String,
     pub trigger: TriggerSource,
+    #[serde(default)]
+    pub kind: PositionKind,
     pub entry_total_sol: f64,
     pub wallet_count: usize,
+    /// The wallets that bought into this position. Surfaced so the UI can
+    /// pre-fill sell panels and so per-wallet exit rules can be applied.
+    #[serde(default)]
+    pub wallet_pubkeys: Vec<String>,
     pub bundle_id: Option<String>,
     pub opened_at_ms: i64,
     pub status: String,
@@ -45,6 +67,8 @@ pub struct ActivePosition {
 pub struct ClosedPosition {
     pub mint: String,
     pub trigger: TriggerSource,
+    #[serde(default)]
+    pub kind: PositionKind,
     pub entry_total_sol: f64,
     pub wallet_count: usize,
     pub bundle_id: Option<String>,
@@ -256,11 +280,15 @@ impl Engine {
         };
         let total = amounts.iter().sum::<f64>();
 
+        let wallet_pubkeys: Vec<String> =
+            snipers.iter().map(|s| s.pubkey.clone()).collect();
         let pos = ActivePosition {
             mint: mint.clone(),
             trigger,
+            kind: PositionKind::Sniper,
             entry_total_sol: total,
             wallet_count: snipers.len(),
+            wallet_pubkeys,
             bundle_id: None,
             opened_at_ms: now_ms(),
             status: "firing buy bundle…".into(),
@@ -366,6 +394,7 @@ impl Engine {
                         let closed = ClosedPosition {
                             mint: active.mint.clone(),
                             trigger: active.trigger,
+                            kind: active.kind,
                             entry_total_sol: active.entry_total_sol,
                             wallet_count: active.wallet_count,
                             bundle_id: active.bundle_id.clone(),
@@ -395,6 +424,160 @@ impl Engine {
                 }
             }
         });
+    }
+}
+
+impl Engine {
+    /// Track a position created by the Launch flow (co-buyer wallets).
+    /// The engine streams price updates so the Sniper dashboard sees live
+    /// P&L on the launch — but per decision 146, NO auto-exit fires from
+    /// here. Exits remain manual via the Launch sell panel or the Trade tab.
+    pub async fn register_launch_position(
+        self: &Arc<Self>,
+        mint: String,
+        snipers: Vec<StoredKeypair>,
+        entry_total_sol: f64,
+        bundle_id: Option<String>,
+    ) {
+        if snipers.is_empty() {
+            return;
+        }
+        let wallet_pubkeys: Vec<String> =
+            snipers.iter().map(|s| s.pubkey.clone()).collect();
+        let bundle_short = bundle_id
+            .as_deref()
+            .map(|b| b[..8.min(b.len())].to_string())
+            .unwrap_or_else(|| "?".into());
+        let pos = ActivePosition {
+            mint: mint.clone(),
+            trigger: TriggerSource::Manual,
+            kind: PositionKind::Launch,
+            entry_total_sol,
+            wallet_count: snipers.len(),
+            wallet_pubkeys: wallet_pubkeys.clone(),
+            bundle_id: bundle_id.clone(),
+            opened_at_ms: now_ms(),
+            status: format!(
+                "launch live ({bundle_short}…) — manual exit only"
+            ),
+            entry_price: None,
+            last_price: None,
+            unrealized_pct: None,
+        };
+        {
+            let mut s = self.state.write().await;
+            if s.positions.iter().any(|p| p.mint == mint) {
+                return; // already tracked
+            }
+            s.positions.push(pos);
+            s.deployed_sol_total += entry_total_sol;
+            s.last_message = format!("tracking launch {}", short(&mint));
+        }
+
+        // Price tracker — feeds live price/P&L into the position. NO exit
+        // logic; manual sell only for launch-kind positions.
+        let state = Arc::clone(&self.state);
+        let ws_url = self.cfg.network.pumpportal_ws.clone();
+        let snipe_set: HashSet<String> = wallet_pubkeys.into_iter().collect();
+        let mint_for_task = mint.clone();
+        tokio::spawn(async move {
+            let (trade_tx, mut trade_rx) = mpsc::channel(256);
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let watcher = tokio::spawn({
+                let url = ws_url.clone();
+                let m = mint_for_task.clone();
+                async move {
+                    crate::price_watcher::run(url, m, trade_tx, cancel_rx).await;
+                }
+            });
+            let mut entry_price: Option<f64> = None;
+            while let Some(t) = trade_rx.recv().await {
+                {
+                    let s = state.read().await;
+                    if !s.positions.iter().any(|p| p.mint == mint_for_task) {
+                        let _ = cancel_tx.send(true);
+                        break;
+                    }
+                }
+                let Some(price) = t.price_sol_per_token() else {
+                    continue;
+                };
+                if entry_price.is_none()
+                    && snipe_set.contains(&t.trader_pubkey)
+                    && t.tx_type.eq_ignore_ascii_case("buy")
+                {
+                    entry_price = Some(price);
+                }
+                let mut s = state.write().await;
+                if let Some(p) = s
+                    .positions
+                    .iter_mut()
+                    .find(|p| p.mint == mint_for_task && p.kind == PositionKind::Launch)
+                {
+                    if entry_price.is_some() && p.entry_price.is_none() {
+                        p.entry_price = entry_price;
+                    }
+                    p.last_price = Some(price);
+                    if let Some(e) = p.entry_price {
+                        if e > 0.0 {
+                            p.unrealized_pct = Some((price - e) / e * 100.0);
+                        }
+                    }
+                }
+            }
+            let _ = watcher.await;
+        });
+    }
+
+    /// Move a launch position from active → closed (called by the manual
+    /// sell flow once the user fires their dump bundles).
+    pub async fn close_launch_position(
+        &self,
+        mint: &str,
+        exit_label: &str,
+    ) {
+        let mut s = self.state.write().await;
+        let snapshot = s
+            .positions
+            .iter()
+            .find(|p| p.mint == mint && p.kind == PositionKind::Launch)
+            .cloned();
+        let Some(active) = snapshot else { return };
+
+        let realized_pct = active.unrealized_pct;
+        let realized_sol = realized_pct
+            .map(|pct| active.entry_total_sol * pct / 100.0);
+        if let Some(pct) = realized_pct {
+            if pct >= 0.0 {
+                s.realized_wins += 1;
+            } else {
+                s.realized_losses += 1;
+            }
+            if let Some(rs) = realized_sol {
+                s.realized_pnl_sol += rs;
+            }
+        }
+        let closed = ClosedPosition {
+            mint: active.mint.clone(),
+            trigger: active.trigger,
+            kind: active.kind,
+            entry_total_sol: active.entry_total_sol,
+            wallet_count: active.wallet_count,
+            bundle_id: active.bundle_id.clone(),
+            opened_at_ms: active.opened_at_ms,
+            closed_at_ms: now_ms(),
+            exit_kind: "manual".into(),
+            realized_pct,
+            entry_price: active.entry_price,
+            last_price: active.last_price,
+            status_label: format!("closed: {exit_label}"),
+        };
+        s.closed_positions.push_front(closed);
+        if s.closed_positions.len() > 100 {
+            s.closed_positions.truncate(100);
+        }
+        s.positions.retain(|p| p.mint != mint);
+        s.last_message = format!("launch position closed {} ({exit_label})", short(mint));
     }
 }
 

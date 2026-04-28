@@ -13,11 +13,15 @@ export interface FeedEntry {
   at_ms: number;
 }
 
+export type PositionKind = "sniper" | "launch" | "manual";
+
 export interface ActivePosition {
   mint: string;
   trigger: TriggerSource;
+  kind?: PositionKind;
   entry_total_sol: number;
   wallet_count: number;
+  wallet_pubkeys?: string[];
   bundle_id: string | null;
   opened_at_ms: number;
   status: string;
@@ -29,6 +33,7 @@ export interface ActivePosition {
 export interface ClosedPosition {
   mint: string;
   trigger: TriggerSource;
+  kind?: PositionKind;
   entry_total_sol: number;
   wallet_count: number;
   bundle_id: string | null;
