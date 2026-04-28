@@ -127,7 +127,7 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    name: publish to ${{ env.RELEASES_REPO }} + R2
+    name: publish releases + R2
     needs: build
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/v')
