@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   Button,
   Card,
@@ -39,14 +38,14 @@ function defaultWalletProfiles(): WalletExitProfiles {
 interface Props {
   wallets: WalletInfo[];
   closedPositions?: ClosedPosition[];
-  /** "full" = Wallets tab; "compact" = Sniper sidebar (hides labels, denser). */
+  /** "full" = Wallets tab; "compact" = Sniper sidebar (no buy/sell rows). */
   mode?: "full" | "compact";
   onConfigChanged?: () => void;
-  /** Mint defaulted into the quick-action buttons. Lifts to the parent so
-   *  the same input can be controlled from outside (e.g. Sniper page). */
   activeMint?: string;
   onActiveMintChange?: (mint: string) => void;
 }
+
+const BALANCE_POLL_MS = 10_000;
 
 export function WalletPanel({
   wallets,
@@ -57,6 +56,7 @@ export function WalletPanel({
   onActiveMintChange,
 }: Props) {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
+  const [balances, setBalances] = useState<Record<string, number>>({});
   const [busyPubkey, setBusyPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ pubkey: string; msg: string } | null>(null);
@@ -65,7 +65,7 @@ export function WalletPanel({
   const activeMint = activeMintProp ?? internalMint;
   const setActiveMint = onActiveMintChange ?? setInternalMint;
 
-  const reload = useCallback(async () => {
+  const reloadCfg = useCallback(async () => {
     try {
       setCfg(await ipc.loadConfig());
     } catch (e) {
@@ -74,16 +74,40 @@ export function WalletPanel({
   }, []);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    reloadCfg();
+  }, [reloadCfg]);
 
-  // Aggregate realized P&L per wallet from closed_positions where
-  // wallet_pubkeys overlap.
+  // Balance polling — every 10 s, replaces the standalone WalletGrid card.
+  useEffect(() => {
+    let mounted = true;
+    let timer: number | undefined;
+    const pubkeys = wallets.map((w) => w.pubkey);
+    if (pubkeys.length === 0) return;
+    async function tick() {
+      try {
+        const res = await ipc.getBalances(pubkeys);
+        if (mounted) setBalances(res);
+      } catch {
+        /* ignore — show last good values */
+      }
+      if (mounted) timer = window.setTimeout(tick, BALANCE_POLL_MS);
+    }
+    tick();
+    return () => {
+      mounted = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [wallets]);
+
   const walletPnl = useMemo(() => {
-    const map = new Map<string, { realized_sol: number; trades: number; wins: number }>();
+    const map = new Map<
+      string,
+      { realized_sol: number; trades: number; wins: number }
+    >();
     if (!closedPositions) return map;
     for (const cp of closedPositions) {
-      const pks = (cp as ClosedPosition & { wallet_pubkeys?: string[] }).wallet_pubkeys ?? [];
+      const pks =
+        (cp as ClosedPosition & { wallet_pubkeys?: string[] }).wallet_pubkeys ?? [];
       if (pks.length === 0) continue;
       const realized =
         cp.realized_pct != null ? (cp.entry_total_sol * cp.realized_pct) / 100 : 0;
@@ -117,8 +141,7 @@ export function WalletPanel({
     try {
       await ipc.saveConfig(updated);
       setCfg(updated);
-      setFeedback({ pubkey, msg: "saved" });
-      window.setTimeout(() => setFeedback(null), 1500);
+      flashFeedback(pubkey, "saved");
       onConfigChanged?.();
     } catch (e) {
       setError(String(e));
@@ -127,9 +150,14 @@ export function WalletPanel({
     }
   }
 
+  function flashFeedback(pubkey: string, msg: string) {
+    setFeedback({ pubkey, msg });
+    window.setTimeout(() => setFeedback(null), 2200);
+  }
+
   async function quickBuy(wallet: WalletInfo, sol: number) {
     if (!activeMint.trim()) {
-      return setError("Set an active mint above to use quick-buy.");
+      return setError("Set an active mint first.");
     }
     setError(null);
     setBusyPubkey(wallet.pubkey);
@@ -139,8 +167,7 @@ export function WalletPanel({
         wallet_pubkeys: [wallet.pubkey],
         strategy: { kind: "uniform", sol },
       });
-      setFeedback({ pubkey: wallet.pubkey, msg: `BUY ${sol} SOL submitted` });
-      window.setTimeout(() => setFeedback(null), 2000);
+      flashFeedback(wallet.pubkey, `BUY ${sol} SOL submitted`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -150,7 +177,7 @@ export function WalletPanel({
 
   async function quickSell(wallet: WalletInfo, percent: number) {
     if (!activeMint.trim()) {
-      return setError("Set an active mint above to use quick-sell.");
+      return setError("Set an active mint first.");
     }
     setError(null);
     setBusyPubkey(wallet.pubkey);
@@ -160,8 +187,7 @@ export function WalletPanel({
         wallet_pubkeys: [wallet.pubkey],
         percent,
       });
-      setFeedback({ pubkey: wallet.pubkey, msg: `SELL ${percent}% submitted` });
-      window.setTimeout(() => setFeedback(null), 2000);
+      flashFeedback(wallet.pubkey, `SELL ${percent}% submitted`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -169,70 +195,57 @@ export function WalletPanel({
     }
   }
 
+  const compact = mode === "compact";
+
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">
-              {mode === "compact" ? "Wallets" : "Wallet panel"}
-            </h3>
-            {mode === "full" && (
-              <p className="text-xs text-fg-muted">
-                Per-wallet TP/SL profile + quick buy/sell. Active mint applies
-                to the preset buttons. SL/TS toggles affect Sniper + Trade
-                positions only — Launch positions stay manual.
-              </p>
-            )}
-          </div>
+          <h3 className="font-semibold">
+            {compact ? "Wallets" : "Wallet panel"}
+          </h3>
           <span className="text-xs text-fg-subtle font-mono">
             {wallets.length} wallets
           </span>
         </div>
       </CardHeader>
-      <CardBody className="space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            Active mint
-          </span>
+      <CardBody className="space-y-4">
+        {/* Active mint input — global to the panel */}
+        <div>
+          <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1.5">
+            Active mint (for quick buy/sell)
+          </label>
           <input
             value={activeMint}
             onChange={(e) => setActiveMint(e.target.value)}
-            placeholder="paste mint for quick buy/sell buttons"
-            className="flex-1 rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-accent"
+            placeholder="paste pump.fun mint address"
+            className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
           />
-          {activeMint && (
-            <button
-              type="button"
-              onClick={() => setActiveMint("")}
-              className="text-[10px] text-fg-subtle hover:text-fg"
-            >
-              clear
-            </button>
-          )}
         </div>
 
         {error && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-xs text-danger">
+          <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
             {error}
           </div>
         )}
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {wallets.map((w) => {
             const profiles = getProfilesFor(w.pubkey);
             const pnl = walletPnl.get(w.pubkey);
             const busy = busyPubkey === w.pubkey;
             const fb = feedback?.pubkey === w.pubkey ? feedback.msg : null;
+            const balance = balances[w.pubkey];
             return (
               <WalletRow
                 key={w.pubkey}
                 wallet={w}
                 profiles={profiles}
-                mode={mode}
+                compact={compact}
                 busy={busy}
                 feedback={fb}
                 pnl={pnl}
+                balance={balance}
                 activeMint={activeMint}
                 onSelectProfile={(idx) =>
                   patchWallet(w.pubkey, { ...profiles, selected: idx })
@@ -246,7 +259,8 @@ export function WalletPanel({
                 onToggleTS={() =>
                   patchWallet(w.pubkey, {
                     ...profiles,
-                    trailing_stop_pct: profiles.trailing_stop_pct == null ? 20 : null,
+                    trailing_stop_pct:
+                      profiles.trailing_stop_pct == null ? 20 : null,
                   })
                 }
                 onQuickBuy={(sol) => quickBuy(w, sol)}
@@ -263,10 +277,11 @@ export function WalletPanel({
 function WalletRow({
   wallet,
   profiles,
-  mode,
+  compact,
   busy,
   feedback,
   pnl,
+  balance,
   activeMint,
   onSelectProfile,
   onToggleSL,
@@ -276,10 +291,11 @@ function WalletRow({
 }: {
   wallet: WalletInfo;
   profiles: WalletExitProfiles;
-  mode: "full" | "compact";
+  compact: boolean;
   busy: boolean;
   feedback: string | null;
   pnl: { realized_sol: number; trades: number; wins: number } | undefined;
+  balance: number | undefined;
   activeMint: string;
   onSelectProfile: (idx: number) => void;
   onToggleSL: () => void;
@@ -288,8 +304,7 @@ function WalletRow({
   onQuickSell: (pct: number) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const nav = useNavigate();
-  const compact = mode === "compact";
+  const isMaster = wallet.label === "master";
 
   async function copy() {
     try {
@@ -304,169 +319,233 @@ function WalletRow({
     realized > 0 ? "text-accent" : realized < 0 ? "text-danger" : "text-fg-subtle";
   const realizedLabel =
     pnl && pnl.trades > 0
-      ? `${realized >= 0 ? "+" : ""}${realized.toFixed(4)}`
+      ? `${realized >= 0 ? "+" : ""}${realized.toFixed(4)} SOL`
       : "—";
 
-  const isMaster = wallet.label === "master";
+  const activeProfile = profiles.profiles[profiles.selected];
 
   return (
     <div
       className={cn(
-        "rounded-lg border bg-bg-subtle p-2",
+        "rounded-xl border bg-bg-subtle p-4",
         isMaster ? "border-accent/30" : "border-border",
       )}
     >
-      {/* Top row: label, pubkey, P&L, quick links */}
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider",
-            isMaster
-              ? "bg-accent/15 text-accent"
-              : "bg-bg-raised text-fg-muted",
-          )}
-        >
-          {wallet.label}
-        </span>
-        <button
-          type="button"
-          onClick={copy}
-          className="flex-1 truncate text-left font-mono text-[10px] text-fg-subtle hover:text-fg"
-          title="copy pubkey"
-        >
-          {copied ? "✓ copied" : `${wallet.pubkey.slice(0, 16)}…`}
-        </button>
-        <span
-          className={`shrink-0 font-mono text-xs tabular-nums font-semibold ${realizedColor}`}
-        >
-          {realizedLabel}
+      {/* Header: identity + balance + P&L */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className={cn(
+              "shrink-0 rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
+              isMaster
+                ? "bg-accent/15 text-accent"
+                : "bg-bg-raised text-fg-muted",
+            )}
+          >
+            {wallet.label}
+          </span>
+          <button
+            type="button"
+            onClick={copy}
+            className="font-mono text-xs text-fg-muted hover:text-fg truncate"
+            title="copy pubkey"
+          >
+            {copied ? "✓ copied" : `${wallet.pubkey.slice(0, 12)}…`}
+          </button>
+        </div>
+        <div className="flex items-center gap-4 text-right">
+          <div>
+            <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
+              balance
+            </div>
+            <div className="font-mono text-sm tabular-nums">
+              {balance != null ? balance.toFixed(3) : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
+              realized
+            </div>
+            <div
+              className={`font-mono text-sm tabular-nums font-semibold ${realizedColor}`}
+            >
+              {realizedLabel}
+            </div>
+          </div>
           {pnl && pnl.trades > 0 && (
-            <span className="ml-1 text-[9px] font-normal text-fg-subtle">
-              {pnl.wins}W/{pnl.trades - pnl.wins}L
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
+                W/L
+              </div>
+              <div className="font-mono text-xs">
+                <span className="text-accent">{pnl.wins}</span>
+                <span className="text-fg-subtle">/</span>
+                <span className="text-danger">{pnl.trades - pnl.wins}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Profile + risk row */}
+      <div className="mt-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
+            Profile
+          </span>
+          {activeProfile && (
+            <span className="text-[10px] font-mono text-fg-muted">
+              TP +{activeProfile.take_profit_pct}% · SL{" "}
+              {profiles.stop_loss_enabled
+                ? `-${activeProfile.stop_loss_pct}%`
+                : "off"}
+              {" · "}
+              {activeProfile.max_hold_seconds}s
             </span>
           )}
-        </span>
-        <button
-          type="button"
-          onClick={() => nav(`/trade?wallet=${encodeURIComponent(wallet.pubkey)}`)}
-          className="shrink-0 text-[10px] text-fg-subtle hover:text-accent"
-          title="open in Trade page"
-        >
-          ↗
-        </button>
-      </div>
-
-      {/* Profile + toggle row */}
-      <div className="mt-2 flex items-center gap-1.5 text-xs">
-        <span className="text-[10px] uppercase tracking-wider text-fg-subtle w-6 shrink-0">
-          TP
-        </span>
-        {profiles.profiles.map((p, idx) => {
-          const sel = profiles.selected === idx;
-          return (
-            <button
-              key={idx}
-              type="button"
-              disabled={busy}
-              onClick={() => onSelectProfile(idx)}
-              title={
-                p.label
-                  ? `${p.label} — TP ${p.take_profit_pct}% / SL ${p.stop_loss_pct}% / ${p.max_hold_seconds}s`
-                  : `Profile ${idx + 1}`
-              }
-              className={cn(
-                "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
-                sel
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-border text-fg-muted hover:border-border-strong",
-              )}
-            >
-              {idx + 1}
-            </button>
-          );
-        })}
-        <span className="ml-2 text-[10px] uppercase tracking-wider text-fg-subtle">
-          SL
-        </span>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onToggleSL}
-          className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
-            profiles.stop_loss_enabled
-              ? "border-accent/40 bg-accent/10 text-accent"
-              : "border-border text-fg-subtle",
-          )}
-        >
-          {profiles.stop_loss_enabled
-            ? `-${profiles.profiles[profiles.selected]?.stop_loss_pct ?? 0}%`
-            : "OFF"}
-        </button>
-        <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
-          TS
-        </span>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onToggleTS}
-          title="trailing stop (engine support v0.1.13)"
-          className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors opacity-60",
-            profiles.trailing_stop_pct != null
-              ? "border-warn/40 bg-warn/10 text-warn"
-              : "border-border text-fg-subtle",
-          )}
-        >
-          {profiles.trailing_stop_pct != null
-            ? `-${profiles.trailing_stop_pct}%`
-            : "OFF"}
-        </button>
-      </div>
-
-      {/* Quick-action rows: Buy / Sell */}
-      {!compact && (
-        <div className="mt-1.5 grid grid-cols-[16px_1fr] gap-1.5 items-center text-[10px]">
-          <span className="text-accent font-mono uppercase tracking-wider">B</span>
-          <div className="flex flex-wrap gap-1">
-            {profiles.buy_presets_sol.map((sol) => (
-              <button
-                key={sol}
-                type="button"
-                disabled={busy || !activeMint}
-                onClick={() => onQuickBuy(sol)}
-                className={cn(
-                  "rounded border border-accent/30 bg-accent/10 px-2 py-0.5 font-mono text-[10px] text-accent hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed",
-                )}
-              >
-                {sol}
-              </button>
-            ))}
-          </div>
-          <span className="text-danger font-mono uppercase tracking-wider">S</span>
-          <div className="flex flex-wrap gap-1">
-            {profiles.sell_presets_pct.map((pct) => (
-              <button
-                key={pct}
-                type="button"
-                disabled={busy || !activeMint}
-                onClick={() => onQuickSell(pct)}
-                className={cn(
-                  "rounded border border-danger/30 bg-danger/10 px-2 py-0.5 font-mono text-[10px] text-danger hover:bg-danger/20 disabled:opacity-30 disabled:cursor-not-allowed",
-                )}
-              >
-                {pct}%
-              </button>
-            ))}
-          </div>
         </div>
+        <div className="flex flex-wrap gap-1.5">
+          {profiles.profiles.map((p, idx) => {
+            const sel = profiles.selected === idx;
+            const name = p.label ?? `Profile ${idx + 1}`;
+            return (
+              <button
+                key={idx}
+                type="button"
+                disabled={busy}
+                onClick={() => onSelectProfile(idx)}
+                title={`TP +${p.take_profit_pct}% / SL -${p.stop_loss_pct}% / ${p.max_hold_seconds}s hold`}
+                className={cn(
+                  "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
+                  sel
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-border text-fg-muted hover:border-border-strong hover:text-fg",
+                )}
+              >
+                {compact ? idx + 1 : name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* SL/TS toggles */}
+      <div className="mt-3 flex items-center gap-3">
+        <ToggleChip
+          label="Stop loss"
+          on={profiles.stop_loss_enabled}
+          onLabel={`-${activeProfile?.stop_loss_pct ?? 0}%`}
+          onClick={onToggleSL}
+          disabled={busy}
+        />
+        <ToggleChip
+          label="Trailing stop"
+          on={profiles.trailing_stop_pct != null}
+          onLabel={`-${profiles.trailing_stop_pct}%`}
+          onClick={onToggleTS}
+          disabled={busy}
+          helper="engine support v0.1.13"
+        />
+      </div>
+
+      {/* Quick-buy / quick-sell */}
+      {!compact && (
+        <>
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] uppercase tracking-wider text-accent">
+                Buy this wallet
+              </span>
+              {!activeMint && (
+                <span className="text-[10px] text-fg-subtle">
+                  set active mint to enable
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {profiles.buy_presets_sol.map((sol) => (
+                <Button
+                  key={sol}
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy || !activeMint}
+                  onClick={() => onQuickBuy(sol)}
+                  className="border-accent/30 bg-accent/10 text-accent hover:bg-accent/20"
+                >
+                  {sol} SOL
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-[10px] uppercase tracking-wider text-danger mb-2">
+              Sell this wallet's holdings
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {profiles.sell_presets_pct.map((pct) => (
+                <Button
+                  key={pct}
+                  size="sm"
+                  variant="danger"
+                  disabled={busy || !activeMint}
+                  onClick={() => onQuickSell(pct)}
+                >
+                  {pct}%
+                </Button>
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
       {feedback && (
-        <div className="mt-1.5 text-[10px] font-mono text-accent">
+        <div className="mt-3 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs text-accent">
           ✓ {feedback}
         </div>
       )}
     </div>
+  );
+}
+
+function ToggleChip({
+  label,
+  on,
+  onLabel,
+  onClick,
+  disabled,
+  helper,
+}: {
+  label: string;
+  on: boolean;
+  onLabel: string;
+  onClick: () => void;
+  disabled?: boolean;
+  helper?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={helper}
+      className={cn(
+        "flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50",
+        on
+          ? "border-accent/40 bg-accent/10 text-accent"
+          : "border-border text-fg-muted hover:border-border-strong",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-2 w-2 rounded-full",
+          on ? "bg-accent" : "bg-fg-subtle",
+        )}
+      />
+      <span>{label}</span>
+      <span className="font-mono text-[10px] text-fg-subtle">
+        {on ? onLabel : "OFF"}
+      </span>
+    </button>
   );
 }

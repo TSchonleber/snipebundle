@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Card, CardBody, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
-import { WalletGrid } from "../components/WalletGrid";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
 import { WalletManager } from "../components/WalletManager";
@@ -63,10 +62,6 @@ export function Wallets() {
             <CardBody className="text-sm text-danger">{error}</CardBody>
           </Card>
         )}
-
-        <div className="mt-6">
-          <WalletGrid wallets={wallets} recommendedSol={recommended} />
-        </div>
 
         {wallets.length > 0 && (
           <div className="mt-6">
