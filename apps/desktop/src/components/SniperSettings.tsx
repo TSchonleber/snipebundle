@@ -124,7 +124,7 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
   const [requireSocials, setRequireSocials] = useState(true);
   const [maxEntryMcSol, setMaxEntryMcSol] = useState("50");
   const [funderBlacklistText, setFunderBlacklistText] = useState("");
-  const [targetedDevWalletsText, setTargetedDevWalletsText] = useState("");
+  const [targetedDevWallets, setTargetedDevWallets] = useState<string[]>([]);
   const [bypassFilters, setBypassFilters] = useState(true);
   const [takeProfitPct, setTakeProfitPct] = useState("50");
   const [stopLossPct, setStopLossPct] = useState("30");
@@ -136,7 +136,7 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
     setRequireSocials(cfg.auto.require_socials);
     setMaxEntryMcSol(String(cfg.auto.max_entry_mc_sol));
     setFunderBlacklistText(cfg.auto.funder_blacklist.join("\n"));
-    setTargetedDevWalletsText(cfg.targeted.dev_wallets.join("\n"));
+    setTargetedDevWallets(cfg.targeted.dev_wallets);
     setBypassFilters(cfg.targeted.bypass_filters);
     setTakeProfitPct(String(cfg.exit.take_profit_pct));
     setStopLossPct(String(cfg.exit.stop_loss_pct));
@@ -186,7 +186,7 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
       },
       targeted: {
         ...cfg.targeted,
-        dev_wallets: parseList(targetedDevWalletsText),
+        dev_wallets: targetedDevWallets,
         bypass_filters: bypassFilters,
       },
       exit: {
@@ -447,15 +447,10 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
           />
           {showTargeted && (
             <div className="space-y-3 pt-1">
-              <Field label="Dev wallet pubkeys (one per line)">
-                <textarea
-                  rows={4}
-                  value={targetedDevWalletsText}
-                  onChange={(e) => setTargetedDevWalletsText(e.target.value)}
-                  placeholder="paste dev wallets to follow"
-                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-[10px] focus:outline-none focus:ring-2 focus:ring-accent"
-                />
-              </Field>
+              <DevWalletPicker
+                value={targetedDevWallets}
+                onChange={setTargetedDevWallets}
+              />
               <label className="flex items-center gap-2 text-xs cursor-pointer">
                 <input
                   type="checkbox"
@@ -527,6 +522,165 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+// Solana pubkeys are base58, decode to 32 bytes — encoded length 32-44 chars,
+// alphabet excludes 0/O/I/l. We do a lightweight check; the engine re-validates
+// on use.
+const BASE58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
+function isValidPubkey(s: string): boolean {
+  const t = s.trim();
+  return t.length >= 32 && t.length <= 44 && BASE58.test(t);
+}
+
+function DevWalletPicker({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const [feedback, setFeedback] = useState<{
+    kind: "added" | "rejected";
+    msg: string;
+  } | null>(null);
+
+  function add() {
+    const tokens = input
+      .split(/[\s,]+/)
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+    if (tokens.length === 0) return;
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    const dupe: string[] = [];
+    for (const t of tokens) {
+      if (!isValidPubkey(t)) {
+        invalid.push(t);
+        continue;
+      }
+      if (value.includes(t) || valid.includes(t)) {
+        dupe.push(t);
+        continue;
+      }
+      valid.push(t);
+    }
+    if (valid.length > 0) {
+      onChange([...value, ...valid]);
+    }
+    const parts: string[] = [];
+    if (valid.length > 0) parts.push(`+${valid.length} added`);
+    if (dupe.length > 0) parts.push(`${dupe.length} duplicate`);
+    if (invalid.length > 0) parts.push(`${invalid.length} invalid`);
+    setFeedback(
+      parts.length > 0
+        ? {
+            kind: invalid.length > 0 || dupe.length > 0 ? "rejected" : "added",
+            msg: parts.join(" · "),
+          }
+        : null,
+    );
+    setInput(valid.length > 0 ? "" : input);
+  }
+
+  function remove(pk: string) {
+    onChange(value.filter((x) => x !== pk));
+  }
+
+  function clear() {
+    onChange([]);
+    setFeedback({ kind: "added", msg: "cleared" });
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="block text-xs text-fg-subtle uppercase tracking-wider">
+          Dev wallets to follow ({value.length})
+        </label>
+        {value.length > 0 && (
+          <button
+            type="button"
+            onClick={clear}
+            className="text-[10px] text-fg-subtle hover:text-danger underline-offset-2 hover:underline"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="paste pubkey(s) — Enter or click Add"
+          className="flex-1 rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={add}
+          disabled={input.trim().length === 0}
+        >
+          Add
+        </Button>
+      </div>
+
+      {feedback && (
+        <div
+          className={cn(
+            "text-[10px] font-mono",
+            feedback.kind === "added" ? "text-accent" : "text-warn",
+          )}
+        >
+          {feedback.msg}
+        </div>
+      )}
+
+      <p className="text-[10px] text-fg-subtle">
+        Paste a single pubkey or many separated by spaces, commas, or newlines.
+        Invalid base58 / wrong length / duplicates are skipped.
+      </p>
+
+      {value.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border bg-bg-raised/40 p-3 text-center text-xs text-fg-subtle">
+          No tracked devs yet. Add one above.
+        </div>
+      ) : (
+        <ul className="space-y-1 max-h-48 overflow-y-auto pr-1">
+          {value.map((pk) => (
+            <li
+              key={pk}
+              className="flex items-center gap-2 rounded-md border border-border bg-bg-raised px-2 py-1.5 group"
+            >
+              <span className="font-mono text-[10px] text-accent shrink-0">
+                ▸
+              </span>
+              <code className="flex-1 break-all font-mono text-[10px] text-fg">
+                {pk}
+              </code>
+              <button
+                type="button"
+                onClick={() => remove(pk)}
+                className="shrink-0 text-fg-subtle hover:text-danger text-xs px-1 opacity-60 group-hover:opacity-100 transition-opacity"
+                title="Remove"
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
