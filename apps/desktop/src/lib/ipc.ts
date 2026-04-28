@@ -25,12 +25,18 @@ export interface LaunchMetadata {
   website: string | null;
 }
 
+export interface CoBuyerSpec {
+  pubkey: string;
+  sol: number;
+}
+
 export interface LaunchArgs {
   dev_pubkey: string;
   metadata: LaunchMetadata;
   metadata_uri: string | null;
   image_path: string | null;
   dev_buy_sol: number;
+  co_buyers?: CoBuyerSpec[];
 }
 
 export interface LaunchResult {
@@ -39,6 +45,8 @@ export interface LaunchResult {
   metadata_uri: string;
   dev_pubkey: string;
   dev_buy_sol: number;
+  co_buyer_count: number;
+  co_buyer_total_sol: number;
 }
 
 export interface ImportDevArgs {

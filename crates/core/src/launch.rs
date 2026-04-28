@@ -27,6 +27,14 @@ pub struct LaunchResult {
     pub metadata_uri: String,
     pub dev_pubkey: String,
     pub dev_buy_sol: f64,
+    pub co_buyer_count: usize,
+    pub co_buyer_total_sol: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoBuyer {
+    pub pubkey: String,
+    pub sol: f64,
 }
 
 /// Upload image + metadata to pump.fun's IPFS endpoint, returning the
@@ -104,24 +112,48 @@ fn guess_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// Build, sign, and submit a single-bundle pump.fun launch:
-///   tx[0] = create token + dev wallet's opening buy (atomic, both inside one tx)
+/// Build, sign, and submit a single Jito bundle for a pump.fun launch.
 ///
+///   tx[0]   = create token + dev wallet's opening buy (atomic)
+///   tx[1..] = optional co-buyer buys (sniper wallets buying in the same block)
+///
+/// The Jito bundle hard-caps at 5 transactions, so up to 4 co-buyers.
 /// Defensive against third-party snipers (Jito tip ensures same-block landing).
-/// No additional sniper wallets — this is the legitimate launch flow only.
+/// Co-buyers each sign their own tx; dev signs tx[0] alongside the mint keypair.
 pub async fn execute_launch(
     dev: &StoredKeypair,
     metadata: &LaunchMetadata,
     metadata_uri: &str,
     dev_buy_sol: f64,
+    co_buyers: &[(StoredKeypair, f64)],
     net: &NetworkConfig,
 ) -> Result<LaunchResult> {
     anyhow::ensure!(dev_buy_sol >= 0.0, "dev_buy_sol must be non-negative");
+    anyhow::ensure!(
+        co_buyers.len() <= 4,
+        "co-buyers capped at 4 (Jito bundle is 5 txs incl. create)"
+    );
+    for (sk, sol) in co_buyers {
+        anyhow::ensure!(*sol > 0.0, "co-buyer {} amount must be > 0", sk.pubkey);
+        anyhow::ensure!(
+            sk.pubkey != dev.pubkey,
+            "co-buyer {} duplicates the dev wallet — drop it",
+            sk.pubkey
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (sk, _) in co_buyers {
+        anyhow::ensure!(
+            seen.insert(sk.pubkey.clone()),
+            "duplicate co-buyer pubkey {}",
+            sk.pubkey
+        );
+    }
 
     let mint_kp = Keypair::new();
     let mint_pub = mint_kp.pubkey().to_string();
 
-    let action = serde_json::json!({
+    let mut actions = vec![serde_json::json!({
         "publicKey": dev.pubkey,
         "action": "create",
         "tokenMetadata": {
@@ -135,44 +167,93 @@ pub async fn execute_launch(
         "slippage": net.slippage_bps,
         "priorityFee": net.jito_tip_sol,
         "pool": "pump",
-    });
+    })];
+    for (sk, sol) in co_buyers {
+        actions.push(serde_json::json!({
+            "publicKey": sk.pubkey,
+            "action": "buy",
+            "mint": mint_pub,
+            "denominatedInSol": "true",
+            "amount": sol,
+            "slippage": net.slippage_bps,
+            "priorityFee": net.priority_fee_sol,
+            "pool": "pump",
+        }));
+    }
 
-    debug!(mint = %mint_pub, dev = %dev.pubkey, "submitting create to /api/trade-local");
+    debug!(
+        mint = %mint_pub,
+        dev = %dev.pubkey,
+        co_buyers = co_buyers.len(),
+        "submitting launch bundle to /api/trade-local"
+    );
     let client = reqwest::Client::new();
     let resp = client
         .post(&net.trade_local_url)
-        .json(&serde_json::json!([action]))
+        .json(&actions)
         .send()
         .await
-        .context("POST trade-local create")?;
+        .context("POST trade-local launch bundle")?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        bail!("trade-local create {status}: {text}");
+        bail!("trade-local launch {status}: {text}");
     }
 
     let unsigned_b58 = parse_unsigned_response(&text)?;
     anyhow::ensure!(
-        !unsigned_b58.is_empty(),
-        "trade-local returned no transactions"
+        unsigned_b58.len() == 1 + co_buyers.len(),
+        "expected {} txs, got {}",
+        1 + co_buyers.len(),
+        unsigned_b58.len()
     );
 
     let dev_kp = wallet::from_stored(dev)?;
+    let co_kps: Vec<Keypair> = co_buyers
+        .iter()
+        .map(|(sk, _)| wallet::from_stored(sk))
+        .collect::<Result<Vec<_>>>()?;
+
+    // tx[0] needs dev + mint signatures
     let mut signed_b58 = Vec::with_capacity(unsigned_b58.len());
-    for b58 in &unsigned_b58 {
-        let signed = sign_with_keys(b58, &[&dev_kp, &mint_kp])?;
-        signed_b58.push(signed);
+    signed_b58.push(sign_with_keys(&unsigned_b58[0], &[&dev_kp, &mint_kp])?);
+
+    // tx[1..] each need a single co-buyer signature
+    for (i, b58) in unsigned_b58.iter().enumerate().skip(1) {
+        let kp = &co_kps[i - 1];
+        // verify required signer matches the co-buyer for this slot
+        let raw = bs58::decode(b58)
+            .into_vec()
+            .map_err(|e| anyhow!("decode co-buyer tx[{i}] b58: {e}"))?;
+        let tx: VersionedTransaction =
+            bincode::deserialize(&raw).context("deserialize co-buyer tx")?;
+        let static_keys = tx.message.static_account_keys();
+        let expected = kp.pubkey();
+        let actual = *static_keys
+            .first()
+            .ok_or_else(|| anyhow!("co-buyer tx[{i}] missing static_account_keys[0]"))?;
+        anyhow::ensure!(
+            actual == expected,
+            "co-buyer order mismatch at tx[{i}]: expected {}, got {}",
+            expected,
+            actual
+        );
+        signed_b58.push(sign_with_keys(b58, &[kp])?);
     }
 
-    let bundle_id = crate::bundler::submit_jito_bundle(&net.jito_block_engine, &signed_b58).await?;
+    let bundle_id =
+        crate::bundler::submit_jito_bundle(&net.jito_block_engine, &signed_b58).await?;
 
+    let total_co = co_buyers.iter().map(|(_, s)| *s).sum::<f64>();
     Ok(LaunchResult {
         mint: mint_pub,
         bundle_id,
         metadata_uri: metadata_uri.to_string(),
         dev_pubkey: dev.pubkey.clone(),
         dev_buy_sol,
+        co_buyer_count: co_buyers.len(),
+        co_buyer_total_sol: total_co,
     })
 }
 

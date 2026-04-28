@@ -479,12 +479,20 @@ pub async fn import_dev_wallet(
 }
 
 #[derive(Deserialize)]
+pub struct CoBuyerSpec {
+    pub pubkey: String,
+    pub sol: f64,
+}
+
+#[derive(Deserialize)]
 pub struct LaunchArgs {
     pub dev_pubkey: String,
     pub metadata: LaunchMetadata,
     pub metadata_uri: Option<String>,
     pub image_path: Option<String>,
     pub dev_buy_sol: f64,
+    #[serde(default)]
+    pub co_buyers: Vec<CoBuyerSpec>,
 }
 
 #[tauri::command]
@@ -519,11 +527,19 @@ pub async fn launch_token(
             .map_err(err)?
     };
 
+    let mut co_buyers: Vec<(StoredKeypair, f64)> = Vec::with_capacity(args.co_buyers.len());
+    for cb in &args.co_buyers {
+        let kp = find_wallet(&ks, &cb.pubkey)
+            .ok_or_else(|| format!("co-buyer wallet {} not in keystore", cb.pubkey))?;
+        co_buyers.push((kp, cb.sol));
+    }
+
     launch::execute_launch(
         &dev,
         &args.metadata,
         &metadata_uri,
         args.dev_buy_sol,
+        &co_buyers,
         &cfg.network,
     )
     .await

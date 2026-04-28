@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
-import { Button, Card, CardBody, CardHeader } from "@snipebundle/ui";
+import { useEffect, useMemo, useState } from "react";
+import { Button, Card, CardBody, CardHeader, cn } from "@snipebundle/ui";
 import type { WalletInfo } from "@snipebundle/ui";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc, type LaunchResult } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 
+type CoBuyerStrategy = "uniform" | "per_wallet" | "random";
+
 export function Launch() {
   const [devWallets, setDevWallets] = useState<WalletInfo[]>([]);
+  const [snipers, setSnipers] = useState<WalletInfo[]>([]);
   const [selectedDev, setSelectedDev] = useState<string>("");
 
   // form
@@ -18,6 +21,15 @@ export function Launch() {
   const [telegram, setTelegram] = useState("");
   const [website, setWebsite] = useState("");
   const [devBuy, setDevBuy] = useState("0.5");
+
+  // co-buyers
+  const [coBuyersEnabled, setCoBuyersEnabled] = useState(false);
+  const [coBuyerPicked, setCoBuyerPicked] = useState<string[]>([]);
+  const [coStrategy, setCoStrategy] = useState<CoBuyerStrategy>("uniform");
+  const [coUniform, setCoUniform] = useState("0.1");
+  const [coPerWallet, setCoPerWallet] = useState<Record<string, string>>({});
+  const [coRandomMin, setCoRandomMin] = useState("0.05");
+  const [coRandomMax, setCoRandomMax] = useState("0.20");
 
   // import-dev modal
   const [showImport, setShowImport] = useState(false);
@@ -36,6 +48,7 @@ export function Launch() {
     const all = [...master, ...devs];
     setDevWallets(all);
     if (all.length > 0 && !selectedDev) setSelectedDev(all[0].pubkey);
+    setSnipers(base.filter((w) => w.label.startsWith("sniper")));
   }
 
   useEffect(() => {
@@ -56,6 +69,48 @@ export function Launch() {
     }
   }
 
+  function buildCoBuyers(): { pubkey: string; sol: number }[] | string {
+    if (!coBuyersEnabled || coBuyerPicked.length === 0) return [];
+    if (coStrategy === "uniform") {
+      const v = parseFloat(coUniform);
+      if (!Number.isFinite(v) || v <= 0) return "Co-buyer uniform amount must be > 0.";
+      return coBuyerPicked.map((pk) => ({ pubkey: pk, sol: v }));
+    }
+    if (coStrategy === "per_wallet") {
+      const out: { pubkey: string; sol: number }[] = [];
+      for (const pk of coBuyerPicked) {
+        const v = parseFloat(coPerWallet[pk] ?? "");
+        if (!Number.isFinite(v) || v <= 0) {
+          return `Set a positive amount for co-buyer ${pk.slice(0, 8)}…`;
+        }
+        out.push({ pubkey: pk, sol: v });
+      }
+      return out;
+    }
+    const lo = parseFloat(coRandomMin);
+    const hi = parseFloat(coRandomMax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo <= 0 || hi < lo) {
+      return "Co-buyer random range must satisfy 0 < min ≤ max.";
+    }
+    return coBuyerPicked.map((pk) => ({
+      pubkey: pk,
+      sol: lo + Math.random() * (hi - lo),
+    }));
+  }
+
+  function toggleCoBuyer(pk: string) {
+    if (coBuyerPicked.includes(pk)) {
+      setCoBuyerPicked(coBuyerPicked.filter((p) => p !== pk));
+    } else if (coBuyerPicked.length >= 4) {
+      return;
+    } else {
+      setCoBuyerPicked([...coBuyerPicked, pk]);
+      if (!coPerWallet[pk]) {
+        setCoPerWallet({ ...coPerWallet, [pk]: coUniform });
+      }
+    }
+  }
+
   async function launch() {
     setError(null);
     if (!selectedDev) return setError("Pick a dev wallet.");
@@ -64,6 +119,9 @@ export function Launch() {
     if (!Number.isFinite(amount) || amount < 0) {
       return setError("Dev buy SOL must be a non-negative number.");
     }
+    const coBuyers = buildCoBuyers();
+    if (typeof coBuyers === "string") return setError(coBuyers);
+
     setBusy(true);
     setResult(null);
     try {
@@ -80,6 +138,7 @@ export function Launch() {
         metadata_uri: null,
         image_path: imagePath,
         dev_buy_sol: amount,
+        co_buyers: coBuyers.length > 0 ? coBuyers : undefined,
       });
       setResult(res);
     } catch (e) {
@@ -88,6 +147,32 @@ export function Launch() {
       setBusy(false);
     }
   }
+
+  const totalCoBuy = useMemo(() => {
+    if (!coBuyersEnabled) return 0;
+    if (coStrategy === "uniform") {
+      const v = parseFloat(coUniform);
+      return Number.isFinite(v) ? v * coBuyerPicked.length : 0;
+    }
+    if (coStrategy === "per_wallet") {
+      return coBuyerPicked.reduce((acc, pk) => {
+        const v = parseFloat(coPerWallet[pk] ?? "0");
+        return acc + (Number.isFinite(v) ? v : 0);
+      }, 0);
+    }
+    const lo = parseFloat(coRandomMin);
+    const hi = parseFloat(coRandomMax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return 0;
+    return ((lo + hi) / 2) * coBuyerPicked.length;
+  }, [
+    coBuyersEnabled,
+    coStrategy,
+    coUniform,
+    coPerWallet,
+    coRandomMin,
+    coRandomMax,
+    coBuyerPicked,
+  ]);
 
   return (
     <div className="min-h-screen">
@@ -198,6 +283,188 @@ export function Launch() {
               </CardBody>
             </Card>
 
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold">Co-buyers (optional)</h2>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={coBuyersEnabled}
+                      onChange={(e) => setCoBuyersEnabled(e.target.checked)}
+                      className="h-4 w-4 accent-accent"
+                    />
+                    <span>Enable</span>
+                  </label>
+                </div>
+              </CardHeader>
+              {coBuyersEnabled && (
+                <CardBody className="space-y-4">
+                  <div className="rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs text-warn">
+                    <strong>Heads up.</strong> Co-buyers are sniper wallets
+                    you own buying alongside the dev's create in the same
+                    Jito bundle. Same-block landing makes the launch
+                    defensive against third-party snipers — but if you
+                    later dump these positions into retail buying, you're
+                    in pump-and-dump territory under pump.fun TOS and SEC
+                    Rule 10b-5. Build it intentional.
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-fg-subtle uppercase tracking-wider mb-2">
+                      Pick up to 4 sniper wallets
+                    </div>
+                    {snipers.length === 0 ? (
+                      <p className="text-sm text-fg-subtle">
+                        No sniper wallets in keystore. Add some on the Wallets
+                        tab.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {snipers.map((s) => {
+                          const isSel = coBuyerPicked.includes(s.pubkey);
+                          const atCap = !isSel && coBuyerPicked.length >= 4;
+                          return (
+                            <button
+                              key={s.pubkey}
+                              type="button"
+                              disabled={atCap}
+                              onClick={() => toggleCoBuyer(s.pubkey)}
+                              className={cn(
+                                "w-full rounded-lg border bg-bg-subtle p-2 text-left transition-colors",
+                                isSel
+                                  ? "border-accent bg-accent/5"
+                                  : atCap
+                                    ? "border-border opacity-40 cursor-not-allowed"
+                                    : "border-border hover:border-border-strong",
+                              )}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono text-xs uppercase tracking-wider text-fg-muted">
+                                  {s.label}
+                                </span>
+                                <code className="font-mono text-[10px] text-fg-subtle">
+                                  {s.pubkey.slice(0, 16)}…
+                                </code>
+                                {isSel && (
+                                  <span className="font-mono text-xs text-accent">
+                                    ✓
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <p className="mt-2 text-xs text-fg-subtle font-mono">
+                      {coBuyerPicked.length} / 4 selected
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {(["uniform", "per_wallet", "random"] as CoBuyerStrategy[]).map(
+                        (s) => (
+                          <button
+                            key={s}
+                            onClick={() => setCoStrategy(s)}
+                            className={cn(
+                              "rounded-lg border bg-bg-subtle p-2 text-xs capitalize transition-colors",
+                              coStrategy === s
+                                ? "border-accent text-accent"
+                                : "border-border text-fg-muted hover:border-border-strong",
+                            )}
+                          >
+                            {s.replace("_", "-")}
+                          </button>
+                        ),
+                      )}
+                    </div>
+
+                    {coStrategy === "uniform" && (
+                      <Field label="SOL per co-buyer">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={coUniform}
+                          onChange={(e) => setCoUniform(e.target.value)}
+                          className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                        />
+                      </Field>
+                    )}
+
+                    {coStrategy === "per_wallet" && (
+                      <div className="space-y-2">
+                        {coBuyerPicked.length === 0 ? (
+                          <p className="text-xs text-fg-subtle">
+                            Pick wallets above first.
+                          </p>
+                        ) : (
+                          coBuyerPicked.map((pk) => {
+                            const w = snipers.find((s) => s.pubkey === pk);
+                            return (
+                              <div
+                                key={pk}
+                                className="flex items-center gap-3 rounded-lg border border-border bg-bg-raised px-3 py-2"
+                              >
+                                <span className="font-mono text-xs text-fg-muted w-20 shrink-0">
+                                  {w?.label ?? "?"}
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={coPerWallet[pk] ?? ""}
+                                  onChange={(e) =>
+                                    setCoPerWallet({
+                                      ...coPerWallet,
+                                      [pk]: e.target.value,
+                                    })
+                                  }
+                                  className="flex-1 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
+                                />
+                                <span className="text-xs text-fg-subtle">
+                                  SOL
+                                </span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+
+                    {coStrategy === "random" && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Min SOL">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={coRandomMin}
+                            onChange={(e) => setCoRandomMin(e.target.value)}
+                            className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                        </Field>
+                        <Field label="Max SOL">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={coRandomMax}
+                            onChange={(e) => setCoRandomMax(e.target.value)}
+                            className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                        </Field>
+                      </div>
+                    )}
+
+                    <p className="mt-3 text-xs text-fg-subtle font-mono">
+                      ~{totalCoBuy.toFixed(4)} SOL total co-buy across{" "}
+                      {coBuyerPicked.length} wallets
+                    </p>
+                  </div>
+                </CardBody>
+              )}
+            </Card>
+
             {error && (
               <Card className="border-danger/40">
                 <CardBody className="text-sm text-danger">{error}</CardBody>
@@ -208,7 +475,11 @@ export function Launch() {
 
             <div className="flex justify-end">
               <Button size="lg" onClick={launch} disabled={busy}>
-                {busy ? "Launching…" : "Launch token"}
+                {busy
+                  ? "Launching…"
+                  : coBuyersEnabled && coBuyerPicked.length > 0
+                    ? `Launch + ${coBuyerPicked.length} co-buyer${coBuyerPicked.length === 1 ? "" : "s"}`
+                    : "Launch token"}
               </Button>
             </div>
           </div>
@@ -253,8 +524,16 @@ export function Launch() {
                   <li>Mint pubkey is generated fresh per launch.</li>
                   <li>Dev wallet pays for the create + opening buy.</li>
                   <li>
-                    No other wallets are added to this bundle. To buy alongside
-                    with multiple wallets, that's the Sniper feature, not this.
+                    Co-buyers (when enabled) buy in the same Jito bundle as
+                    the create — same-block landing, no third-party sniper
+                    can slip in cheaper.
+                  </li>
+                  <li>
+                    Co-buyers each pay their own SOL + a fee. They don't share
+                    the dev's allocation.
+                  </li>
+                  <li>
+                    Bundle hard cap is 5 txs (1 create + up to 4 co-buyers).
                   </li>
                 </ul>
               </CardBody>
@@ -312,6 +591,11 @@ function LaunchResultCard({ result }: { result: LaunchResult }) {
           </a>
         </Row>
         <Row label="Dev buy">{result.dev_buy_sol} SOL</Row>
+        {result.co_buyer_count > 0 && (
+          <Row label={`Co-buyers (${result.co_buyer_count})`}>
+            {result.co_buyer_total_sol.toFixed(4)} SOL total
+          </Row>
+        )}
         <Row label="Metadata">
           <a
             href={result.metadata_uri}
