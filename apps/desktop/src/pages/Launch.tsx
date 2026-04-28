@@ -7,6 +7,12 @@ import { AppNav } from "../components/AppNav";
 
 type CoBuyerStrategy = "uniform" | "per_wallet" | "random";
 
+interface LaunchSellTarget {
+  mint: string;
+  devWallet: string;
+  coBuyerWallets: string[];
+}
+
 export function Launch() {
   const [devWallets, setDevWallets] = useState<WalletInfo[]>([]);
   const [snipers, setSnipers] = useState<WalletInfo[]>([]);
@@ -30,6 +36,14 @@ export function Launch() {
   const [coPerWallet, setCoPerWallet] = useState<Record<string, string>>({});
   const [coRandomMin, setCoRandomMin] = useState("0.05");
   const [coRandomMax, setCoRandomMax] = useState("0.20");
+
+  // post-launch manual sell
+  const [sellTarget, setSellTarget] = useState<LaunchSellTarget | null>(null);
+  const [sellPicked, setSellPicked] = useState<string[]>([]);
+  const [sellPercent, setSellPercent] = useState(100);
+  const [sellBundleIds, setSellBundleIds] = useState<string[]>([]);
+  const [sellBusy, setSellBusy] = useState(false);
+  const [sellError, setSellError] = useState<string | null>(null);
 
   // import-dev modal
   const [showImport, setShowImport] = useState(false);
@@ -124,6 +138,8 @@ export function Launch() {
 
     setBusy(true);
     setResult(null);
+    setSellError(null);
+    setSellBundleIds([]);
     try {
       const res = await ipc.launchToken({
         dev_pubkey: selectedDev,
@@ -141,10 +157,53 @@ export function Launch() {
         co_buyers: coBuyers.length > 0 ? coBuyers : undefined,
       });
       setResult(res);
+      const coBuyerWallets = coBuyers.map((cb) => cb.pubkey);
+      setSellTarget({
+        mint: res.mint,
+        devWallet: selectedDev,
+        coBuyerWallets,
+      });
+      setSellPicked(coBuyerWallets);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function toggleSellWallet(pk: string) {
+    setSellPicked((picked) =>
+      picked.includes(pk) ? picked.filter((p) => p !== pk) : [...picked, pk],
+    );
+  }
+
+  async function sellLaunchSelection() {
+    setSellError(null);
+    if (!sellTarget) return;
+    if (sellPicked.length === 0) {
+      return setSellError("Pick at least one wallet to sell from.");
+    }
+    if (sellPercent <= 0 || sellPercent > 100) {
+      return setSellError("Sell percent must be 1–100.");
+    }
+    const chunks = chunkPubkeys(sellPicked, 5);
+    setSellBusy(true);
+    setSellBundleIds([]);
+    try {
+      const submitted: string[] = [];
+      for (const chunk of chunks) {
+        const id = await ipc.manualDump({
+          mint: sellTarget.mint,
+          wallet_pubkeys: chunk,
+          percent: sellPercent,
+        });
+        submitted.push(id);
+        setSellBundleIds([...submitted]);
+      }
+    } catch (e) {
+      setSellError(String(e));
+    } finally {
+      setSellBusy(false);
     }
   }
 
@@ -173,6 +232,8 @@ export function Launch() {
     coRandomMax,
     coBuyerPicked,
   ]);
+
+  const sellChunks = useMemo(() => chunkPubkeys(sellPicked, 5), [sellPicked]);
 
   return (
     <div className="min-h-screen">
@@ -327,7 +388,7 @@ export function Launch() {
                       <div className="space-y-1.5">
                         {snipers.map((s) => {
                           const isSel = coBuyerPicked.includes(s.pubkey);
-                          const atCap = !isSel && coBuyerPicked.length >= 4;
+                          const atCap = !isSel && coBuyerPicked.length >= 25;
                           return (
                             <button
                               key={s.pubkey}
@@ -471,6 +532,7 @@ export function Launch() {
                       {coBuyerPicked.length} wallets
                     </p>
                   </div>
+
                 </CardBody>
               )}
             </Card>
@@ -482,6 +544,23 @@ export function Launch() {
             )}
 
             {result && <LaunchResultCard result={result} />}
+
+            {sellTarget && (
+              <LaunchSellPanel
+                target={sellTarget}
+                devWallet={devWallets.find((w) => w.pubkey === sellTarget.devWallet)}
+                snipers={snipers}
+                picked={sellPicked}
+                percent={sellPercent}
+                chunks={sellChunks}
+                bundleIds={sellBundleIds}
+                busy={sellBusy}
+                error={sellError}
+                onToggleWallet={toggleSellWallet}
+                onPercentChange={setSellPercent}
+                onSell={sellLaunchSelection}
+              />
+            )}
 
             <div className="flex justify-end">
               <Button size="lg" onClick={launch} disabled={busy}>
@@ -563,6 +642,14 @@ export function Launch() {
       </div>
     </div>
   );
+}
+
+function chunkPubkeys(pubkeys: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < pubkeys.length; i += size) {
+    chunks.push(pubkeys.slice(i, i + size));
+  }
+  return chunks;
 }
 
 function Field({
@@ -660,6 +747,174 @@ function LaunchResultCard({ result }: { result: LaunchResult }) {
             View on pump.fun →
           </Button>
         </a>
+      </CardBody>
+    </Card>
+  );
+}
+
+function LaunchSellPanel({
+  target,
+  devWallet,
+  snipers,
+  picked,
+  percent,
+  chunks,
+  bundleIds,
+  busy,
+  error,
+  onToggleWallet,
+  onPercentChange,
+  onSell,
+}: {
+  target: LaunchSellTarget;
+  devWallet: WalletInfo | undefined;
+  snipers: WalletInfo[];
+  picked: string[];
+  percent: number;
+  chunks: string[][];
+  bundleIds: string[];
+  busy: boolean;
+  error: string | null;
+  onToggleWallet: (pubkey: string) => void;
+  onPercentChange: (percent: number) => void;
+  onSell: () => void;
+}) {
+  const coBuyerRows = target.coBuyerWallets.map((pk) => ({
+    pubkey: pk,
+    label: snipers.find((s) => s.pubkey === pk)?.label ?? "co-buyer",
+    role: "Co-buyer",
+  }));
+  const rows = [
+    {
+      pubkey: target.devWallet,
+      label: devWallet?.label ?? "dev",
+      role: "Dev wallet",
+    },
+    ...coBuyerRows,
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="font-semibold">Manual launch sell</h2>
+      </CardHeader>
+      <CardBody className="space-y-3 text-sm">
+        <Row label="Mint">
+          <code className="break-all font-mono text-xs">{target.mint}</code>
+        </Row>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-semibold">Percent of holdings</label>
+            <span className="font-mono text-sm text-accent">{percent}%</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={100}
+            value={percent}
+            onChange={(e) => onPercentChange(parseInt(e.target.value, 10))}
+            className="w-full accent-accent"
+          />
+          <div className="mt-1 grid grid-cols-4 gap-1 text-xs">
+            {[25, 50, 75, 100].map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => onPercentChange(p)}
+                className={cn(
+                  "rounded border py-1 transition-colors",
+                  percent === p
+                    ? "border-accent text-accent"
+                    : "border-border text-fg-muted hover:border-border-strong",
+                )}
+              >
+                {p}%
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          {rows.map((row) => {
+            const isPicked = picked.includes(row.pubkey);
+            return (
+              <button
+                key={`${row.role}-${row.pubkey}`}
+                type="button"
+                onClick={() => onToggleWallet(row.pubkey)}
+                className={cn(
+                  "w-full rounded-lg border bg-bg-raised p-2 text-left transition-colors",
+                  isPicked
+                    ? "border-danger bg-danger/5"
+                    : "border-border hover:border-border-strong",
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-mono text-xs uppercase tracking-wider text-fg-muted">
+                      {row.label}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-fg-subtle">
+                      {row.role}
+                    </div>
+                  </div>
+                  <code className="min-w-0 flex-1 truncate text-right font-mono text-[10px] text-fg-subtle">
+                    {row.pubkey}
+                  </code>
+                  {isPicked && (
+                    <span className="font-mono text-xs text-danger">✓</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-xs text-fg-subtle">
+          {picked.length} wallet{picked.length === 1 ? "" : "s"} selected
+          {picked.length > 0 && (
+            <>
+              {" "}
+              across {chunks.length} sell bundle
+              {chunks.length === 1 ? "" : "s"}.
+            </>
+          )}
+        </p>
+        {bundleIds.length > 0 && (
+          <div className="text-xs text-fg-muted">
+            Submitted bundles:
+            <ul className="mt-1 space-y-0.5">
+              {bundleIds.map((id) => (
+                <li key={id}>
+                  <a
+                    href={`https://explorer.jito.wtf/bundle/${id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-[10px] text-accent hover:underline"
+                  >
+                    {id}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {error && (
+          <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+            {error}
+          </div>
+        )}
+        <Button
+          size="lg"
+          variant="danger"
+          onClick={onSell}
+          disabled={busy || picked.length === 0}
+          className="w-full"
+        >
+          {busy
+            ? "Submitting…"
+            : `SELL ${percent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
+        </Button>
       </CardBody>
     </Card>
   );

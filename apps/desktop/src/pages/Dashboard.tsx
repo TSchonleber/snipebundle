@@ -9,6 +9,7 @@ import {
 } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { SniperSettings } from "../components/SniperSettings";
 
 export function Dashboard() {
   const [state, setState] = useState<EngineState | null>(null);
@@ -200,20 +201,16 @@ export function Dashboard() {
                 </div>
               </CardBody>
             </Card>
+            <SniperSettings />
             <Card>
               <CardBody>
-                <h3 className="font-semibold">Settings</h3>
-                <p className="mt-2 text-sm text-fg-subtle">
-                  Settings panel lands in the next update. For now, edit the
-                  config file at{" "}
-                  <code className="font-mono text-xs">
-                    ~/.config/snipebundle/config.toml
+                <p className="text-xs text-fg-subtle">
+                  Filter, targeted-dev, and exit knobs land in v0.1.7. For
+                  now, edit those at{" "}
+                  <code className="font-mono text-[10px]">
+                    ~/Library/Application Support/snipebundle/config.toml
                   </code>{" "}
-                  (Linux/Mac) or{" "}
-                  <code className="font-mono text-xs">
-                    %APPDATA%\snipebundle\config.toml
-                  </code>{" "}
-                  (Windows) and restart.
+                  (macOS) and restart the engine.
                 </p>
               </CardBody>
             </Card>

@@ -1,3 +1,4 @@
+use crate::amounts::AmountStrategy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -30,6 +31,14 @@ pub struct TriggerConfig {
     pub targeted_enabled: bool,
     #[serde(default = "default_sol_per_snipe")]
     pub sol_per_snipe: f64,
+    /// Pubkeys of sniper wallets to use in each auto-snipe bundle.
+    /// Empty = use the first 5 snipers from the keystore (legacy behavior).
+    /// Capped at 5 by the bundler regardless.
+    #[serde(default)]
+    pub auto_snipe_wallets: Vec<String>,
+    /// Override amount allocation per snipe. None = uniform with sol_per_snipe.
+    #[serde(default)]
+    pub amount_strategy: Option<AmountStrategy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

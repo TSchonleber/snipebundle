@@ -30,6 +30,47 @@ export interface CoBuyerSpec {
   sol: number;
 }
 
+// --- Config (mirrors crates/core/src/config.rs) ----------------------------
+
+export interface AppConfig {
+  wallets: {
+    count: number;
+    max_sol_per_wallet: number;
+    master_reserve_sol: number;
+  };
+  trigger: {
+    auto_enabled: boolean;
+    targeted_enabled: boolean;
+    sol_per_snipe: number;
+    auto_snipe_wallets: string[];
+    amount_strategy: AmountStrategy | null;
+  };
+  auto: {
+    min_dev_buy_pct: number;
+    require_socials: boolean;
+    max_entry_mc_sol: number;
+    funder_blacklist: string[];
+  };
+  targeted: {
+    dev_wallets: string[];
+    bypass_filters: boolean;
+  };
+  exit: {
+    take_profit_pct: number;
+    stop_loss_pct: number;
+    max_hold_seconds: number;
+  };
+  network: {
+    rpc_url: string;
+    pumpportal_ws: string;
+    trade_local_url: string;
+    jito_block_engine: string;
+    jito_tip_sol: number;
+    priority_fee_sol: number;
+    slippage_bps: number;
+  };
+}
+
 export interface LaunchArgs {
   dev_pubkey: string;
   metadata: LaunchMetadata;
@@ -85,8 +126,8 @@ export const ipc = {
   listWallets: () => invoke<WalletInfo[]>("list_wallets"),
   revealWallets: (passphrase: string) =>
     invoke<WalletWithSecret[]>("reveal_wallets", { passphrase }),
-  loadConfig: () => invoke<unknown>("load_config"),
-  saveConfig: (cfg: unknown) => invoke<void>("save_config", { cfg }),
+  loadConfig: () => invoke<AppConfig>("load_config"),
+  saveConfig: (cfg: AppConfig) => invoke<void>("save_config", { cfg }),
   startEngine: () => invoke<void>("start_engine"),
   stopEngine: () => invoke<void>("stop_engine"),
   setPaused: (paused: boolean) => invoke<void>("set_paused", { paused }),

@@ -184,11 +184,47 @@ impl Engine {
     }
 
     async fn spawn_snipe(&self, mint: String, trigger: TriggerSource) {
-        let snipers = self.keystore.snipers.clone();
         let cfg = self.cfg.clone();
         let state = Arc::clone(&self.state);
-        let sol = cfg.trigger.sol_per_snipe;
-        let total = sol * snipers.len() as f64;
+
+        // Resolve which wallets fire on this snipe.
+        let snipers: Vec<crate::keystore::StoredKeypair> =
+            if cfg.trigger.auto_snipe_wallets.is_empty() {
+                // Legacy: first 5 snipers in keystore order.
+                self.keystore.snipers.iter().take(5).cloned().collect()
+            } else {
+                let allow: std::collections::HashSet<&String> =
+                    cfg.trigger.auto_snipe_wallets.iter().collect();
+                self.keystore
+                    .snipers
+                    .iter()
+                    .filter(|w| allow.contains(&w.pubkey))
+                    .take(5)
+                    .cloned()
+                    .collect()
+            };
+        if snipers.is_empty() {
+            self.note(format!(
+                "no active sniper wallets configured — skipped {}",
+                short(&mint)
+            ))
+            .await;
+            return;
+        }
+
+        // Resolve per-wallet amounts.
+        let pubkeys: Vec<String> = snipers.iter().map(|s| s.pubkey.clone()).collect();
+        let amounts: Vec<f64> = match &cfg.trigger.amount_strategy {
+            Some(strat) => match strat.resolve(&pubkeys) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.note(format!("strategy error: {e}")).await;
+                    return;
+                }
+            },
+            None => vec![cfg.trigger.sol_per_snipe; snipers.len()],
+        };
+        let total = amounts.iter().sum::<f64>();
 
         let pos = ActivePosition {
             mint: mint.clone(),
@@ -209,7 +245,7 @@ impl Engine {
         }
 
         tokio::spawn(async move {
-            match bundler::execute_buy(&snipers, &mint, sol, &cfg.network).await {
+            match bundler::execute_buy_per_wallet(&snipers, &mint, &amounts, &cfg.network).await {
                 Ok(bundle_id) => {
                     {
                         let mut s = state.write().await;
