@@ -1,29 +1,36 @@
 import Link from "next/link";
 import { Button, Card, CardBody } from "@snipebundle/ui";
 
-const REPO = "TSchonleber/snipebundle";
+// Public installers live in TSchonleber/snipebundle-releases. The R2 mirror at
+// dl.snipebundle.app is enabled once the R2 secrets are configured in CI.
+const RELEASES_REPO = "TSchonleber/snipebundle-releases";
+const R2_BASE = process.env.NEXT_PUBLIC_DL_BASE; // e.g. "https://dl.snipebundle.app/latest"
+
+function dlUrl(file: string) {
+  if (R2_BASE) return `${R2_BASE}/${file}`;
+  return `https://github.com/${RELEASES_REPO}/releases/latest/download/${file}`;
+}
 
 export default function DownloadPage() {
-  const releases = `https://github.com/${REPO}/releases/latest`;
   const platforms = [
     {
       name: "Windows",
       detail: "Windows 10 1809+ / 11. WebView2 included.",
       file: "snipebundle-setup.msi",
-      url: `${releases}/download/snipebundle-setup.msi`,
+      url: dlUrl("snipebundle-setup.msi"),
       featured: true,
     },
     {
       name: "macOS",
       detail: "Apple Silicon or Intel. macOS 11+.",
       file: "snipebundle.dmg",
-      url: `${releases}/download/snipebundle.dmg`,
+      url: dlUrl("snipebundle.dmg"),
     },
     {
       name: "Linux",
       detail: "AppImage. Most distros.",
       file: "snipebundle.AppImage",
-      url: `${releases}/download/snipebundle.AppImage`,
+      url: dlUrl("snipebundle.AppImage"),
     },
   ];
 
@@ -90,16 +97,7 @@ export default function DownloadPage() {
         </Card>
 
         <p className="mt-6 text-center text-xs text-fg-subtle">
-          Source on{" "}
-          <a
-            href={`https://github.com/${REPO}`}
-            target="_blank"
-            rel="noreferrer"
-            className="hover:text-fg"
-          >
-            GitHub
-          </a>
-          . Built locally, runs locally. Never custodial.
+          Built locally, runs locally. Never custodial. Apache-2.0 licensed.
         </p>
       </div>
     </main>

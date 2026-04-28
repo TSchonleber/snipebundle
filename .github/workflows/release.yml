@@ -9,8 +9,11 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASES_REPO: TSchonleber/snipebundle-releases
+
 jobs:
-  publish-tauri:
+  build:
     name: build (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -89,25 +92,100 @@ jobs:
           rm -rf icon.iconset
 
       - name: install npm deps
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --no-frozen-lockfile
 
-      - name: build tauri
+      - name: build tauri (no publish)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "snipebundle ${{ github.ref_name }}"
-          releaseBody: |
-            ## snipebundle ${{ github.ref_name }}
-
-            Download the installer for your OS:
-            - **Windows**: `snipebundle_*.msi` or `snipebundle_*-setup.exe`
-            - **macOS**: `snipebundle_*.dmg`
-            - **Linux**: `snipebundle_*.AppImage` or `snipebundle_*.deb`
-
-            See [USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/USER_GUIDE.md) for setup instructions after install.
-          releaseDraft: false
-          prerelease: false
+          # Build only — we publish to the public releases repo in a later
+          # step using the RELEASES_REPO_PAT secret. Setting tagName empty
+          # prevents tauri-action from creating a release in this repo.
           args: ${{ matrix.args }}
+
+      - name: collect artifacts
+        shell: bash
+        run: |
+          mkdir -p _artifacts
+          shopt -s nullglob globstar
+          for f in apps/desktop/src-tauri/target/**/release/bundle/**/*; do
+            case "$f" in
+              *.msi|*.exe|*.dmg|*.AppImage|*.deb|*.rpm|*.app.tar.gz)
+                cp "$f" _artifacts/
+                ;;
+            esac
+          done
+          ls -la _artifacts || true
+
+      - name: upload artifacts (intra-job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: _artifacts/*
+          if-no-files-found: warn
+
+  publish:
+    name: publish to ${{ env.RELEASES_REPO }} + R2
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: _all_artifacts
+          pattern: installers-*
+          merge-multiple: true
+
+      - name: list collected
+        run: ls -la _all_artifacts || true
+
+      - name: publish release to public repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_PAT }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::RELEASES_REPO_PAT secret not set. Add a fine-scoped PAT with contents:write on $RELEASES_REPO."
+            exit 1
+          fi
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<EOF
+          ## snipebundle $TAG
+
+          Download the installer for your OS:
+
+          - **Windows**: \`snipebundle-setup.msi\` (or \`snipebundle_*-setup.exe\`)
+          - **macOS**: \`snipebundle.dmg\`
+          - **Linux**: \`snipebundle.AppImage\` or \`snipebundle.deb\`
+
+          See [snipebundle.app](https://snipebundle.app) for setup instructions.
+
+          Source code is private; this repo only hosts the public installers.
+          EOF
+          gh release create "$TAG" \
+            --repo "$RELEASES_REPO" \
+            --title "snipebundle $TAG" \
+            --notes-file "$notes_file" \
+            _all_artifacts/* || \
+          gh release upload "$TAG" --repo "$RELEASES_REPO" --clobber _all_artifacts/*
+
+      - name: upload to Cloudflare R2 (optional)
+        if: env.R2_ACCOUNT_ID != '' && env.R2_BUCKET != ''
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          for f in _all_artifacts/*; do
+            base=$(basename "$f")
+            aws s3 cp "$f" "s3://${R2_BUCKET}/${TAG}/${base}" --endpoint-url "$ENDPOINT"
+            aws s3 cp "$f" "s3://${R2_BUCKET}/latest/${base}" --endpoint-url "$ENDPOINT"
+          done

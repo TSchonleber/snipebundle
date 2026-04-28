@@ -11,8 +11,8 @@ exclude = ["apps/desktop/src-tauri"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "UNLICENSED"
-repository = "https://github.com/r4vager/snipebundle"
+license = "Apache-2.0"
+repository = "https://github.com/TSchonleber/snipebundle"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full"] }

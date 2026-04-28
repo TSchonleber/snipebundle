@@ -121,8 +121,26 @@ then `pnpm --filter snipebundle-web build`).
 
 ## Repos / hosting
 
-- Source: <https://github.com/TSchonleber/snipebundle> (private)
-- Web: deploys to Vercel (point at `apps/web`)
-- Desktop installers: GitHub Releases (`apps/desktop/src-tauri/target/release/bundle/`)
+- **Source** (private): <https://github.com/TSchonleber/snipebundle>
+- **Public installers**: <https://github.com/TSchonleber/snipebundle-releases>
+  — auto-published from CI on every tag push. Apache-2.0 licensed.
+- **Web** (Vercel): deploys from this repo's workspace root with `vercel.json`
+  pointing the build at `apps/web`.
+- **R2 mirror** (optional): set `R2_ACCOUNT_ID`, `R2_BUCKET`,
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` GitHub Actions secrets, plus a
+  `NEXT_PUBLIC_DL_BASE` env var on Vercel pointing at the R2 custom domain
+  (e.g. `https://dl.snipebundle.app/latest`). Download buttons auto-switch.
+
+## Required CI secrets
+
+Set these in <https://github.com/TSchonleber/snipebundle/settings/secrets/actions>:
+
+| Secret | Purpose | Required? |
+|---|---|---|
+| `RELEASES_REPO_PAT` | Fine-scoped PAT with `contents:write` on `TSchonleber/snipebundle-releases`. Used by the publish job to push installers to the public repo. | **yes for releases** |
+| `R2_ACCOUNT_ID` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Cloudflare R2 mirror. | optional |
+
+Without `RELEASES_REPO_PAT`, the build job still runs but the publish job fails
+with a clear error. Tag pushes that should produce releases need the PAT set.
 
 See [USER_GUIDE.md](USER_GUIDE.md) for the non-technical install + use guide.
