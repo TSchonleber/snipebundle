@@ -782,30 +782,161 @@ function LaunchSellPanel({
   const coBuyerRows = target.coBuyerWallets.map((pk) => ({
     pubkey: pk,
     label: snipers.find((s) => s.pubkey === pk)?.label ?? "co-buyer",
-    role: "Co-buyer",
+    role: "Co-buyer" as const,
   }));
   const rows = [
     {
       pubkey: target.devWallet,
       label: devWallet?.label ?? "dev",
-      role: "Dev wallet",
+      role: "Dev wallet" as const,
     },
     ...coBuyerRows,
   ];
+
+  const submitted = bundleIds.length;
+  const status: "ready" | "submitting" | "submitted" | "partial" = busy
+    ? "submitting"
+    : submitted > 0 && submitted >= chunks.length
+      ? "submitted"
+      : submitted > 0
+        ? "partial"
+        : "ready";
+
+  const statusBadge = (() => {
+    switch (status) {
+      case "ready":
+        return {
+          label: "READY TO SELL",
+          className: "bg-warn/15 text-warn border-warn/40",
+          dot: "bg-warn animate-pulse",
+        };
+      case "submitting":
+        return {
+          label: "SUBMITTING…",
+          className: "bg-accent/15 text-accent border-accent/40",
+          dot: "bg-accent animate-pulse",
+        };
+      case "partial":
+        return {
+          label: `${submitted}/${chunks.length} BUNDLES SUBMITTED`,
+          className: "bg-warn/15 text-warn border-warn/40",
+          dot: "bg-warn",
+        };
+      case "submitted":
+        return {
+          label: "SELL SUBMITTED",
+          className: "bg-accent/15 text-accent border-accent/40",
+          dot: "bg-accent",
+        };
+    }
+  })();
+
   return (
-    <Card>
-      <CardHeader>
-        <h2 className="font-semibold">Manual launch sell</h2>
+    <Card className="border-warn/40 shadow-[0_0_0_1px_rgba(242,200,124,0.2),0_0_28px_rgba(242,200,124,0.12)]">
+      <CardHeader className="bg-warn/5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-bold text-lg text-warn">▼ Sell launch position</h2>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              The token is live. When you decide to exit, pick wallets +
+              percent and click <span className="font-semibold text-fg">SELL NOW</span>.
+            </p>
+          </div>
+          <span
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full border px-3 py-1 font-mono text-[10px] font-semibold tracking-wider whitespace-nowrap",
+              statusBadge.className,
+            )}
+          >
+            <span className={cn("h-2 w-2 rounded-full", statusBadge.dot)} />
+            {statusBadge.label}
+          </span>
+        </div>
       </CardHeader>
-      <CardBody className="space-y-3 text-sm">
+      <CardBody className="space-y-5 text-sm">
         <Row label="Mint">
           <code className="break-all font-mono text-xs">{target.mint}</code>
         </Row>
 
-        <div>
+        {/* ===== STEP 1 ===== */}
+        <section>
+          <SellStep n={1} title="Wallets to sell from" />
+          <p className="mb-2 text-xs text-fg-muted">
+            Click rows to toggle. Dev wallet is unchecked by default — sell it
+            only when you mean to exit your dev allocation.
+          </p>
+          <div className="space-y-1.5">
+            {rows.map((row) => {
+              const isPicked = picked.includes(row.pubkey);
+              const isDev = row.role === "Dev wallet";
+              return (
+                <button
+                  key={`${row.role}-${row.pubkey}`}
+                  type="button"
+                  onClick={() => onToggleWallet(row.pubkey)}
+                  className={cn(
+                    "w-full rounded-lg border bg-bg-raised p-2.5 text-left transition-colors",
+                    isPicked
+                      ? "border-danger bg-danger/10"
+                      : "border-border hover:border-border-strong",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={cn(
+                          "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
+                          isPicked
+                            ? "border-danger bg-danger text-bg"
+                            : "border-border bg-bg",
+                        )}
+                      >
+                        {isPicked && <span className="text-xs font-bold">✓</span>}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs uppercase tracking-wider text-fg">
+                            {row.label}
+                          </span>
+                          <span
+                            className={cn(
+                              "rounded-full border px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-wider",
+                              isDev
+                                ? "border-accent/40 bg-accent/10 text-accent"
+                                : "border-border text-fg-subtle",
+                            )}
+                          >
+                            {row.role}
+                          </span>
+                        </div>
+                        <code className="mt-0.5 block font-mono text-[10px] text-fg-subtle">
+                          {row.pubkey.slice(0, 16)}…
+                        </code>
+                      </div>
+                    </div>
+                    <span
+                      className={cn(
+                        "font-mono text-[10px] uppercase tracking-wider",
+                        isPicked ? "text-danger" : "text-fg-subtle",
+                      )}
+                    >
+                      {isPicked ? "WILL SELL" : "skip"}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ===== STEP 2 ===== */}
+        <section>
+          <SellStep n={2} title="How much of each wallet to sell" />
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-semibold">Percent of holdings</label>
-            <span className="font-mono text-sm text-accent">{percent}%</span>
+            <span className="text-xs text-fg-muted">Percent of holdings</span>
+            <span className="font-mono text-lg font-bold text-danger tabular-nums">
+              {percent}%
+            </span>
           </div>
           <input
             type="range"
@@ -813,18 +944,18 @@ function LaunchSellPanel({
             max={100}
             value={percent}
             onChange={(e) => onPercentChange(parseInt(e.target.value, 10))}
-            className="w-full accent-accent"
+            className="w-full accent-danger"
           />
-          <div className="mt-1 grid grid-cols-4 gap-1 text-xs">
+          <div className="mt-2 grid grid-cols-4 gap-1.5 text-xs">
             {[25, 50, 75, 100].map((p) => (
               <button
                 key={p}
                 type="button"
                 onClick={() => onPercentChange(p)}
                 className={cn(
-                  "rounded border py-1 transition-colors",
+                  "rounded-md border py-1.5 font-mono transition-colors",
                   percent === p
-                    ? "border-accent text-accent"
+                    ? "border-danger bg-danger/10 text-danger"
                     : "border-border text-fg-muted hover:border-border-strong",
                 )}
               >
@@ -832,91 +963,110 @@ function LaunchSellPanel({
               </button>
             ))}
           </div>
-        </div>
+          <p className="mt-2 text-[10px] text-fg-subtle">
+            Token balance is queried live per wallet at submit time. Wallets
+            with zero holdings are skipped automatically.
+          </p>
+        </section>
 
-        <div className="space-y-1.5">
-          {rows.map((row) => {
-            const isPicked = picked.includes(row.pubkey);
-            return (
-              <button
-                key={`${row.role}-${row.pubkey}`}
-                type="button"
-                onClick={() => onToggleWallet(row.pubkey)}
-                className={cn(
-                  "w-full rounded-lg border bg-bg-raised p-2 text-left transition-colors",
-                  isPicked
-                    ? "border-danger bg-danger/5"
-                    : "border-border hover:border-border-strong",
-                )}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-mono text-xs uppercase tracking-wider text-fg-muted">
-                      {row.label}
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-fg-subtle">
-                      {row.role}
-                    </div>
-                  </div>
-                  <code className="min-w-0 flex-1 truncate text-right font-mono text-[10px] text-fg-subtle">
-                    {row.pubkey}
-                  </code>
-                  {isPicked && (
-                    <span className="font-mono text-xs text-danger">✓</span>
+        {/* ===== STEP 3 ===== */}
+        <section>
+          <SellStep n={3} title="Confirm and submit" />
+
+          <div className="rounded-lg border border-border bg-bg-raised p-3 mb-3">
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <div className="text-fg-subtle uppercase tracking-wider">
+                  wallets selected
+                </div>
+                <div className="mt-1 font-mono text-fg">
+                  {picked.length} / {rows.length}
+                </div>
+              </div>
+              <div>
+                <div className="text-fg-subtle uppercase tracking-wider">
+                  sell percent
+                </div>
+                <div className="mt-1 font-mono text-fg">{percent}%</div>
+              </div>
+              <div>
+                <div className="text-fg-subtle uppercase tracking-wider">
+                  Jito bundles
+                </div>
+                <div className="mt-1 font-mono text-fg">
+                  {chunks.length} ({chunks.length}× tip)
+                </div>
+              </div>
+              <div>
+                <div className="text-fg-subtle uppercase tracking-wider">
+                  dev included?
+                </div>
+                <div className="mt-1 font-mono">
+                  {picked.includes(target.devWallet) ? (
+                    <span className="text-warn">YES</span>
+                  ) : (
+                    <span className="text-fg-subtle">no</span>
                   )}
                 </div>
-              </button>
-            );
-          })}
-        </div>
+              </div>
+            </div>
+          </div>
 
-        <p className="text-xs text-fg-subtle">
-          {picked.length} wallet{picked.length === 1 ? "" : "s"} selected
-          {picked.length > 0 && (
-            <>
-              {" "}
-              across {chunks.length} sell bundle
-              {chunks.length === 1 ? "" : "s"}.
-            </>
+          {error && (
+            <div className="mb-3 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {error}
+            </div>
           )}
-        </p>
-        {bundleIds.length > 0 && (
-          <div className="text-xs text-fg-muted">
-            Submitted bundles:
-            <ul className="mt-1 space-y-0.5">
-              {bundleIds.map((id) => (
-                <li key={id}>
-                  <a
-                    href={`https://explorer.jito.wtf/bundle/${id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-[10px] text-accent hover:underline"
-                  >
-                    {id}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {error && (
-          <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
-            {error}
-          </div>
-        )}
-        <Button
-          size="lg"
-          variant="danger"
-          onClick={onSell}
-          disabled={busy || picked.length === 0}
-          className="w-full"
-        >
-          {busy
-            ? "Submitting…"
-            : `SELL ${percent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
-        </Button>
+
+          <Button
+            size="lg"
+            variant="danger"
+            onClick={onSell}
+            disabled={busy || picked.length === 0}
+            className="w-full text-base font-bold"
+          >
+            {busy
+              ? "Submitting…"
+              : picked.length === 0
+                ? "Select wallets above to enable"
+                : `▼ SELL NOW — ${percent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
+          </Button>
+
+          {bundleIds.length > 0 && (
+            <div className="mt-4 rounded-lg border border-accent/40 bg-accent/5 p-3">
+              <div className="text-xs font-semibold text-accent uppercase tracking-wider">
+                ✓ {bundleIds.length} bundle{bundleIds.length === 1 ? "" : "s"} submitted
+              </div>
+              <ul className="mt-2 space-y-1">
+                {bundleIds.map((id) => (
+                  <li key={id}>
+                    <a
+                      href={`https://explorer.jito.wtf/bundle/${id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-[11px] text-accent hover:underline break-all"
+                    >
+                      {id}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
       </CardBody>
     </Card>
+  );
+}
+
+function SellStep({ n, title }: { n: number; title: string }) {
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-warn/20 text-[10px] font-mono font-bold text-warn">
+        {n}
+      </span>
+      <h3 className="font-semibold text-sm">{title}</h3>
+    </div>
   );
 }
 

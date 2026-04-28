@@ -115,6 +115,41 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
     return { kind: "random", min_sol: lo, max_sol: hi };
   }
 
+  // ----- v0.1.7 advanced sections (filter / targeted / exit) -----
+  const [showFilters, setShowFilters] = useState(false);
+  const [showTargeted, setShowTargeted] = useState(false);
+  const [showExit, setShowExit] = useState(false);
+
+  const [minDevBuyPct, setMinDevBuyPct] = useState("5");
+  const [requireSocials, setRequireSocials] = useState(true);
+  const [maxEntryMcSol, setMaxEntryMcSol] = useState("50");
+  const [funderBlacklistText, setFunderBlacklistText] = useState("");
+  const [targetedDevWalletsText, setTargetedDevWalletsText] = useState("");
+  const [bypassFilters, setBypassFilters] = useState(true);
+  const [takeProfitPct, setTakeProfitPct] = useState("50");
+  const [stopLossPct, setStopLossPct] = useState("30");
+  const [maxHoldSeconds, setMaxHoldSeconds] = useState("60");
+
+  useEffect(() => {
+    if (!cfg) return;
+    setMinDevBuyPct(String(cfg.auto.min_dev_buy_pct));
+    setRequireSocials(cfg.auto.require_socials);
+    setMaxEntryMcSol(String(cfg.auto.max_entry_mc_sol));
+    setFunderBlacklistText(cfg.auto.funder_blacklist.join("\n"));
+    setTargetedDevWalletsText(cfg.targeted.dev_wallets.join("\n"));
+    setBypassFilters(cfg.targeted.bypass_filters);
+    setTakeProfitPct(String(cfg.exit.take_profit_pct));
+    setStopLossPct(String(cfg.exit.stop_loss_pct));
+    setMaxHoldSeconds(String(cfg.exit.max_hold_seconds));
+  }, [cfg]);
+
+  function parseList(s: string): string[] {
+    return s
+      .split(/[\n,]+/)
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+  }
+
   async function save() {
     setError(null);
     if (!cfg) return;
@@ -122,16 +157,43 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
     const built = buildStrategy();
     if (typeof built === "string") return setError(built);
 
+    const minDev = parseFloat(minDevBuyPct);
+    const maxMc = parseFloat(maxEntryMcSol);
+    const tp = parseFloat(takeProfitPct);
+    const sl = parseFloat(stopLossPct);
+    const hold = parseInt(maxHoldSeconds, 10);
+    if (!Number.isFinite(minDev) || minDev < 0) return setError("min_dev_buy_pct must be ≥ 0.");
+    if (!Number.isFinite(maxMc) || maxMc <= 0) return setError("max_entry_mc_sol must be > 0.");
+    if (!Number.isFinite(tp) || tp <= 0) return setError("take_profit_pct must be > 0.");
+    if (!Number.isFinite(sl) || sl <= 0) return setError("stop_loss_pct must be > 0.");
+    if (!Number.isFinite(hold) || hold <= 0 || hold > 600) return setError("max_hold_seconds must be 1..=600.");
+
     const next: AppConfig = {
       ...cfg,
       trigger: {
         ...cfg.trigger,
         auto_snipe_wallets: picked,
         amount_strategy: built,
-        // Keep sol_per_snipe in sync with uniform fallback so legacy
-        // config readers still get sane defaults.
         sol_per_snipe:
           built && built.kind === "uniform" ? built.sol : cfg.trigger.sol_per_snipe,
+      },
+      auto: {
+        ...cfg.auto,
+        min_dev_buy_pct: minDev,
+        require_socials: requireSocials,
+        max_entry_mc_sol: maxMc,
+        funder_blacklist: parseList(funderBlacklistText),
+      },
+      targeted: {
+        ...cfg.targeted,
+        dev_wallets: parseList(targetedDevWalletsText),
+        bypass_filters: bypassFilters,
+      },
+      exit: {
+        ...cfg.exit,
+        take_profit_pct: tp,
+        stop_loss_pct: sl,
+        max_hold_seconds: hold,
       },
     };
     setBusy(true);
@@ -325,6 +387,128 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
           </p>
         </div>
 
+        <div className="border-t border-border pt-4 space-y-2">
+          <CollapseHeader
+            open={showFilters}
+            onToggle={() => setShowFilters(!showFilters)}
+            label="Auto filters"
+            sub="What counts as a match"
+          />
+          {showFilters && (
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Min dev buy %">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={minDevBuyPct}
+                    onChange={(e) => setMinDevBuyPct(e.target.value)}
+                    className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+                  />
+                </Field>
+                <Field label="Max entry MC (SOL)">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={maxEntryMcSol}
+                    onChange={(e) => setMaxEntryMcSol(e.target.value)}
+                    className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+                  />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={requireSocials}
+                  onChange={(e) => setRequireSocials(e.target.checked)}
+                  className="h-4 w-4 accent-accent"
+                />
+                <span>Require at least one social link (twitter/telegram/website)</span>
+              </label>
+              <Field label="Funder blacklist (one pubkey per line)">
+                <textarea
+                  rows={3}
+                  value={funderBlacklistText}
+                  onChange={(e) => setFunderBlacklistText(e.target.value)}
+                  placeholder="paste creator pubkeys to skip"
+                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-[10px] focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border pt-4 space-y-2">
+          <CollapseHeader
+            open={showTargeted}
+            onToggle={() => setShowTargeted(!showTargeted)}
+            label="Targeted dev wallets"
+            sub="Always-fire list"
+          />
+          {showTargeted && (
+            <div className="space-y-3 pt-1">
+              <Field label="Dev wallet pubkeys (one per line)">
+                <textarea
+                  rows={4}
+                  value={targetedDevWalletsText}
+                  onChange={(e) => setTargetedDevWalletsText(e.target.value)}
+                  placeholder="paste dev wallets to follow"
+                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-[10px] focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={bypassFilters}
+                  onChange={(e) => setBypassFilters(e.target.checked)}
+                  className="h-4 w-4 accent-accent"
+                />
+                <span>Bypass auto filters when a targeted dev mints</span>
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border pt-4 space-y-2">
+          <CollapseHeader
+            open={showExit}
+            onToggle={() => setShowExit(!showExit)}
+            label="Exit"
+            sub="TP / SL / max hold"
+          />
+          {showExit && (
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <Field label="Take profit %">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={takeProfitPct}
+                  onChange={(e) => setTakeProfitPct(e.target.value)}
+                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+              <Field label="Stop loss %">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={stopLossPct}
+                  onChange={(e) => setStopLossPct(e.target.value)}
+                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+              <Field label="Max hold (s)">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={maxHoldSeconds}
+                  onChange={(e) => setMaxHoldSeconds(e.target.value)}
+                  className="w-full rounded-md border border-border bg-bg-raised px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+
         {error && (
           <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
             {error}
@@ -343,5 +527,44 @@ export function SniperSettings({ onSaved }: { onSaved?: () => void }) {
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+function CollapseHeader({
+  open,
+  onToggle,
+  label,
+  sub,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  sub: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center justify-between text-left"
+    >
+      <div>
+        <div className="text-sm font-semibold">{label}</div>
+        <div className="text-[10px] text-fg-subtle uppercase tracking-wider">
+          {sub}
+        </div>
+      </div>
+      <span className="font-mono text-fg-subtle">{open ? "▾" : "▸"}</span>
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs text-fg-subtle uppercase tracking-wider mb-1">
+        {label}
+      </label>
+      {children}
+    </div>
   );
 }

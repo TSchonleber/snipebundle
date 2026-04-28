@@ -202,18 +202,6 @@ export function Dashboard() {
               </CardBody>
             </Card>
             <SniperSettings />
-            <Card>
-              <CardBody>
-                <p className="text-xs text-fg-subtle">
-                  Filter, targeted-dev, and exit knobs land in v0.1.7. For
-                  now, edit those at{" "}
-                  <code className="font-mono text-[10px]">
-                    ~/Library/Application Support/snipebundle/config.toml
-                  </code>{" "}
-                  (macOS) and restart the engine.
-                </p>
-              </CardBody>
-            </Card>
           </aside>
         </div>
       </div>
