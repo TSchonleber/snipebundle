@@ -16,6 +16,11 @@
     "dialog:default",
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
-    "clipboard-manager:allow-read-text"
+    "clipboard-manager:allow-read-text",
+    "fs:default",
+    "fs:allow-write-text-file",
+    "fs:scope-download-recursive",
+    "fs:scope-document-recursive",
+    "fs:scope-desktop-recursive"
   ]
 }

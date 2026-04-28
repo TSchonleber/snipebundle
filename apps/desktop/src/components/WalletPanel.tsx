@@ -15,6 +15,7 @@ import {
   type ExitProfile,
   type WalletExitProfiles,
 } from "../lib/ipc";
+import { ExportKeysModal } from "./ExportKeysModal";
 
 const DEFAULT_PROFILES: ExitProfile[] = [
   { label: "Conservative", take_profit_pct: 25, stop_loss_pct: 15, max_hold_seconds: 60 },
@@ -62,6 +63,7 @@ export function WalletPanel({
   const [feedback, setFeedback] = useState<{ pubkey: string; msg: string } | null>(null);
   const [internalMint, setInternalMint] = useState("");
   const [showPresetEditor, setShowPresetEditor] = useState(false);
+  const [showExport, setShowExport] = useState(false);
 
   const activeMint = activeMintProp ?? internalMint;
   const setActiveMint = onActiveMintChange ?? setInternalMint;
@@ -249,6 +251,16 @@ export function WalletPanel({
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {!compact && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setShowExport(true)}
+                title="Reveal & export private keys for backup"
+              >
+                🔑 Export keys
+              </Button>
+            )}
             {!compact && cfg && (
               <Button
                 size="sm"
@@ -340,6 +352,8 @@ export function WalletPanel({
           })}
         </div>
       </CardBody>
+
+      {showExport && <ExportKeysModal onClose={() => setShowExport(false)} />}
     </Card>
   );
 }
