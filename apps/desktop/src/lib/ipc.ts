@@ -55,6 +55,20 @@ export interface WalletExitProfiles {
   sell_presets_pct: number[];
 }
 
+/**
+ * v0.1.17 per-wallet binding. `selected_template = i` resolves to
+ * `AppConfig.profile_templates[i]`; `null` means use this wallet's own
+ * `custom` profile. Editing a template updates every wallet bound to it.
+ */
+export interface WalletProfileBinding {
+  selected_template: number | null;
+  custom: ExitProfile;
+  stop_loss_enabled: boolean;
+  trailing_stop_pct: number | null;
+  buy_presets_sol: number[];
+  sell_presets_pct: number[];
+}
+
 export interface AppConfig {
   wallets: {
     count: number;
@@ -80,7 +94,12 @@ export interface AppConfig {
   };
   exit: ExitRule;
   wallet_exit_rules: Record<string, ExitRule>;
+  /** v0.1.12 legacy. Read-only — UI writes to `wallet_bindings`. */
   wallet_profiles: Record<string, WalletExitProfiles>;
+  /** v0.1.17: shared exit-rule templates referenced by wallet bindings. */
+  profile_templates: ExitProfile[];
+  /** v0.1.17: per-wallet binding (template idx OR custom) + UI presets. */
+  wallet_bindings: Record<string, WalletProfileBinding>;
   presets: {
     buy_presets_sol: number[];
     sell_presets_pct: number[];

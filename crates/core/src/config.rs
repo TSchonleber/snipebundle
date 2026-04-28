@@ -11,17 +11,23 @@ pub struct Config {
     pub auto: AutoFilters,
     pub targeted: TargetedConfig,
     pub exit: ExitConfig,
-    /// Legacy single-rule-per-wallet (v0.1.10). Read for backwards compat
-    /// when `wallet_profiles` is absent for the same pubkey.
+    /// Legacy single-rule-per-wallet (v0.1.10). Read for backwards compat.
     #[serde(default)]
     pub wallet_exit_rules: HashMap<String, ExitConfig>,
-    /// New as of v0.1.12: 5 named profiles per wallet, with a selected index,
-    /// plus SL toggle, optional trailing-stop %, and quick-action presets.
+    /// Legacy v0.1.12: per-wallet copy of all 5 profiles. Read for backwards
+    /// compat; new UI writes to `wallet_bindings` instead.
     #[serde(default)]
     pub wallet_profiles: HashMap<String, WalletExitProfiles>,
-    /// Shared buy SOL / sell % preset arrays driving the WalletPanel quick-action
-    /// buttons. Editable from the panel; per-wallet override still possible via
-    /// `wallet_profiles[pubkey].buy_presets_sol` / `.sell_presets_pct`.
+    /// v0.1.17: shared exit-rule templates referenced by wallet bindings.
+    /// Editing one here updates every wallet bound to it.
+    #[serde(default = "default_profiles")]
+    pub profile_templates: Vec<ExitProfile>,
+    /// v0.1.17: per-wallet binding into `profile_templates` plus a per-wallet
+    /// `custom` override slot, SL/TS toggles, and quick-action presets.
+    #[serde(default)]
+    pub wallet_bindings: HashMap<String, WalletProfileBinding>,
+    /// Default buy SOL / sell % preset arrays for new wallets. Per-wallet
+    /// presets live on `wallet_bindings[pubkey]`.
     #[serde(default)]
     pub presets: GlobalPresets,
     pub network: NetworkConfig,
@@ -180,6 +186,91 @@ impl Default for WalletExitProfiles {
     }
 }
 
+/// v0.1.17 per-wallet binding. `selected_template = Some(i)` resolves to
+/// `Config.profile_templates[i]`; `None` means use this wallet's own `custom`
+/// profile. Editing a template updates every wallet bound to it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletProfileBinding {
+    /// `Some(i)` = use `Config.profile_templates[i]`. `None` = use `custom`.
+    #[serde(default = "default_selected_template")]
+    pub selected_template: Option<usize>,
+    /// Wallet-specific override profile, used when `selected_template` is None.
+    /// Always present so the user can flip to Custom without losing settings.
+    #[serde(default = "default_custom_profile")]
+    pub custom: ExitProfile,
+    #[serde(default = "default_true")]
+    pub stop_loss_enabled: bool,
+    #[serde(default)]
+    pub trailing_stop_pct: Option<f64>,
+    #[serde(default = "default_buy_presets")]
+    pub buy_presets_sol: Vec<f64>,
+    #[serde(default = "default_sell_presets")]
+    pub sell_presets_pct: Vec<f64>,
+}
+
+impl WalletProfileBinding {
+    pub fn resolve(&self, templates: &[ExitProfile]) -> ExitConfig {
+        match self.selected_template {
+            Some(idx) => templates
+                .get(idx)
+                .map(|t| t.to_exit_config())
+                .unwrap_or_else(|| self.custom.to_exit_config()),
+            None => self.custom.to_exit_config(),
+        }
+    }
+
+    pub fn validate(&self, label: &str, template_count: usize) -> Result<()> {
+        if let Some(idx) = self.selected_template {
+            anyhow::ensure!(
+                idx < template_count,
+                "{label}.selected_template ({}) out of range 0..{}",
+                idx,
+                template_count
+            );
+        }
+        self.custom
+            .to_exit_config()
+            .validate(&format!("{label}.custom"))?;
+        if let Some(ts) = self.trailing_stop_pct {
+            anyhow::ensure!(
+                ts > 0.0 && ts < 100.0,
+                "{label}.trailing_stop_pct must be 0 < x < 100"
+            );
+        }
+        anyhow::ensure!(
+            !self.buy_presets_sol.is_empty() && self.buy_presets_sol.len() <= 8,
+            "{label}.buy_presets_sol must have 1..=8 entries"
+        );
+        anyhow::ensure!(
+            !self.sell_presets_pct.is_empty() && self.sell_presets_pct.len() <= 8,
+            "{label}.sell_presets_pct must have 1..=8 entries"
+        );
+        for v in &self.buy_presets_sol {
+            anyhow::ensure!(*v > 0.0, "{label}.buy_presets_sol values must be > 0");
+        }
+        for v in &self.sell_presets_pct {
+            anyhow::ensure!(
+                *v > 0.0 && *v <= 100.0,
+                "{label}.sell_presets_pct values must be 0 < x <= 100"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletProfileBinding {
+    fn default() -> Self {
+        Self {
+            selected_template: default_selected_template(),
+            custom: default_custom_profile(),
+            stop_loss_enabled: true,
+            trailing_stop_pct: None,
+            buy_presets_sol: default_buy_presets(),
+            sell_presets_pct: default_sell_presets(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalPresets {
     #[serde(default = "default_buy_presets")]
@@ -263,6 +354,21 @@ impl Config {
         for (pubkey, profiles) in &self.wallet_profiles {
             profiles.validate(&format!("wallet_profiles.{pubkey}"))?;
         }
+        anyhow::ensure!(
+            !self.profile_templates.is_empty() && self.profile_templates.len() <= 12,
+            "profile_templates must have 1..=12 entries (got {})",
+            self.profile_templates.len()
+        );
+        for (i, t) in self.profile_templates.iter().enumerate() {
+            t.to_exit_config()
+                .validate(&format!("profile_templates[{i}]"))?;
+        }
+        for (pubkey, binding) in &self.wallet_bindings {
+            binding.validate(
+                &format!("wallet_bindings.{pubkey}"),
+                self.profile_templates.len(),
+            )?;
+        }
         self.presets.validate()?;
         anyhow::ensure!(
             self.trigger.sol_per_snipe <= self.wallets.max_sol_per_wallet,
@@ -272,11 +378,15 @@ impl Config {
     }
 
     pub fn exit_for_wallet(&self, pubkey: &str) -> ExitConfig {
-        // v0.1.12 profile system wins
+        // v0.1.17 shared templates + per-wallet binding wins
+        if let Some(binding) = self.wallet_bindings.get(pubkey) {
+            return binding.resolve(&self.profile_templates);
+        }
+        // v0.1.12 per-wallet profile bundle (legacy)
         if let Some(profiles) = self.wallet_profiles.get(pubkey) {
             return profiles.active();
         }
-        // legacy single-rule
+        // v0.1.10 single-rule (legacy)
         if let Some(rule) = self.wallet_exit_rules.get(pubkey) {
             return rule.clone();
         }
@@ -314,6 +424,15 @@ fn default_take_profit() -> f64 { 50.0 }
 fn default_stop_loss() -> f64 { 30.0 }
 fn default_max_hold() -> u64 { 60 }
 fn default_selected_profile() -> usize { 1 } // "Standard" by default
+fn default_selected_template() -> Option<usize> { Some(1) } // "Standard" by default
+fn default_custom_profile() -> ExitProfile {
+    ExitProfile {
+        label: Some("Custom".into()),
+        take_profit_pct: default_take_profit(),
+        stop_loss_pct: default_stop_loss(),
+        max_hold_seconds: default_max_hold(),
+    }
+}
 fn default_rpc() -> String { "https://api.mainnet-beta.solana.com".into() }
 fn default_ws() -> String { "wss://pumpportal.fun/api/data".into() }
 fn default_trade_local() -> String { "https://pumpportal.fun/api/trade-local".into() }

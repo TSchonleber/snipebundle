@@ -14,10 +14,11 @@ import {
   type AppConfig,
   type ExitProfile,
   type WalletExitProfiles,
+  type WalletProfileBinding,
 } from "../lib/ipc";
 import { ExportKeysModal } from "./ExportKeysModal";
 
-const DEFAULT_PROFILES: ExitProfile[] = [
+const DEFAULT_TEMPLATES: ExitProfile[] = [
   { label: "Conservative", take_profit_pct: 25, stop_loss_pct: 15, max_hold_seconds: 60 },
   { label: "Standard", take_profit_pct: 50, stop_loss_pct: 30, max_hold_seconds: 60 },
   { label: "Aggressive", take_profit_pct: 100, stop_loss_pct: 50, max_hold_seconds: 120 },
@@ -25,14 +26,49 @@ const DEFAULT_PROFILES: ExitProfile[] = [
   { label: "Manual", take_profit_pct: 9999, stop_loss_pct: 99, max_hold_seconds: 600 },
 ];
 
-function defaultWalletProfiles(): WalletExitProfiles {
+const DEFAULT_CUSTOM: ExitProfile = {
+  label: "Custom",
+  take_profit_pct: 50,
+  stop_loss_pct: 30,
+  max_hold_seconds: 60,
+};
+
+function defaultBinding(): WalletProfileBinding {
   return {
-    profiles: DEFAULT_PROFILES,
-    selected: 1,
+    selected_template: 1, // "Standard"
+    custom: { ...DEFAULT_CUSTOM },
     stop_loss_enabled: true,
     trailing_stop_pct: null,
     buy_presets_sol: [0.01, 0.05, 0.25, 0.5, 2.0],
     sell_presets_pct: [25, 50, 75, 100],
+  };
+}
+
+/**
+ * Migrate a legacy v0.1.12 WalletExitProfiles into a v0.1.17 binding.
+ * The user's previously-selected profile copy lands in `custom` and the
+ * binding starts on Custom — this preserves their actual numbers instead of
+ * silently re-pointing them at a (potentially different) default template
+ * at the same index.
+ */
+function migrateLegacy(legacy: WalletExitProfiles): WalletProfileBinding {
+  const sel = Math.max(0, Math.min(legacy.selected, legacy.profiles.length - 1));
+  const picked = legacy.profiles[sel];
+  return {
+    selected_template: null, // start on Custom; user can rebind explicitly
+    custom: picked
+      ? { ...picked, label: picked.label ?? "Custom" }
+      : { ...DEFAULT_CUSTOM },
+    stop_loss_enabled: legacy.stop_loss_enabled,
+    trailing_stop_pct: legacy.trailing_stop_pct,
+    buy_presets_sol:
+      legacy.buy_presets_sol && legacy.buy_presets_sol.length > 0
+        ? legacy.buy_presets_sol
+        : [0.01, 0.05, 0.25, 0.5, 2.0],
+    sell_presets_pct:
+      legacy.sell_presets_pct && legacy.sell_presets_pct.length > 0
+        ? legacy.sell_presets_pct
+        : [25, 50, 75, 100],
   };
 }
 
@@ -62,7 +98,6 @@ export function WalletPanel({
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ pubkey: string; msg: string } | null>(null);
   const [internalMint, setInternalMint] = useState("");
-  const [showPresetEditor, setShowPresetEditor] = useState(false);
   const [showExport, setShowExport] = useState(false);
 
   const activeMint = activeMintProp ?? internalMint;
@@ -126,51 +161,41 @@ export function WalletPanel({
     return map;
   }, [closedPositions]);
 
-  function getProfilesFor(pubkey: string): WalletExitProfiles {
-    const stored = cfg?.wallet_profiles?.[pubkey];
-    const defaults = defaultWalletProfiles();
-    const globalPresets = cfg?.presets;
-    // Wallet-specific presets win if explicitly set; otherwise fall back to
-    // the global presets edited from the panel header.
-    return {
-      ...defaults,
-      ...(stored ?? {}),
-      buy_presets_sol:
-        stored?.buy_presets_sol && stored.buy_presets_sol.length > 0
-          ? stored.buy_presets_sol
-          : globalPresets?.buy_presets_sol ?? defaults.buy_presets_sol,
-      sell_presets_pct:
-        stored?.sell_presets_pct && stored.sell_presets_pct.length > 0
-          ? stored.sell_presets_pct
-          : globalPresets?.sell_presets_pct ?? defaults.sell_presets_pct,
-    };
+  const templates: ExitProfile[] =
+    cfg?.profile_templates && cfg.profile_templates.length > 0
+      ? cfg.profile_templates
+      : DEFAULT_TEMPLATES;
+
+  function getBindingFor(pubkey: string): WalletProfileBinding {
+    const stored = cfg?.wallet_bindings?.[pubkey];
+    if (stored) return { ...defaultBinding(), ...stored };
+    // Migrate legacy v0.1.12 wallet_profiles so the row reflects the user's
+    // existing selection until they save (which writes the binding).
+    const legacy = cfg?.wallet_profiles?.[pubkey];
+    if (legacy) return migrateLegacy(legacy);
+    return defaultBinding();
   }
 
-  async function saveGlobalPresets(buy: number[], sell: number[]) {
-    if (!cfg) return;
-    setError(null);
-    const updated: AppConfig = {
-      ...cfg,
-      presets: { buy_presets_sol: buy, sell_presets_pct: sell },
-    };
-    try {
-      await ipc.saveConfig(updated);
-      setCfg(updated);
-      setShowPresetEditor(false);
-      onConfigChanged?.();
-    } catch (e) {
-      setError(String(e));
-    }
+  async function saveWalletPresets(
+    pubkey: string,
+    next: { buy?: number[]; sell?: number[] },
+  ) {
+    const binding = getBindingFor(pubkey);
+    await patchWallet(pubkey, {
+      ...binding,
+      buy_presets_sol: next.buy ?? binding.buy_presets_sol,
+      sell_presets_pct: next.sell ?? binding.sell_presets_pct,
+    });
   }
 
-  async function patchWallet(pubkey: string, next: WalletExitProfiles) {
+  async function patchWallet(pubkey: string, next: WalletProfileBinding) {
     if (!cfg) return;
     setError(null);
     setBusyPubkey(pubkey);
     const updated: AppConfig = {
       ...cfg,
-      wallet_profiles: {
-        ...(cfg.wallet_profiles ?? {}),
+      wallet_bindings: {
+        ...(cfg.wallet_bindings ?? {}),
         [pubkey]: next,
       },
     };
@@ -183,6 +208,31 @@ export function WalletPanel({
       setError(String(e));
     } finally {
       setBusyPubkey(null);
+    }
+  }
+
+  async function saveTemplates(next: ExitProfile[]) {
+    if (!cfg) return;
+    setError(null);
+    const updated: AppConfig = {
+      ...cfg,
+      profile_templates: next,
+      // Clamp any wallet's selected_template that's now out of range.
+      wallet_bindings: Object.fromEntries(
+        Object.entries(cfg.wallet_bindings ?? {}).map(([pk, b]) => [
+          pk,
+          b.selected_template != null && b.selected_template >= next.length
+            ? { ...b, selected_template: null } // fall back to Custom
+            : b,
+        ]),
+      ),
+    };
+    try {
+      await ipc.saveConfig(updated);
+      setCfg(updated);
+      onConfigChanged?.();
+    } catch (e) {
+      setError(String(e));
     }
   }
 
@@ -232,6 +282,7 @@ export function WalletPanel({
   }
 
   const compact = mode === "compact";
+  const [editingTemplates, setEditingTemplates] = useState(false);
 
   return (
     <Card>
@@ -243,32 +294,32 @@ export function WalletPanel({
             </h3>
             {!compact && (
               <p className="text-xs text-fg-subtle mt-0.5">
-                Customize the buy / sell preset buttons via{" "}
-                <strong className="text-fg-muted">Customize buttons</strong>.
-                Customize what each profile (1–5) means per wallet via the ✎
-                icon next to that wallet's profile row.
+                Each wallet picks a shared profile template or its own{" "}
+                <strong className="text-fg-muted">Custom</strong> rule. Edit
+                the templates here to retune every wallet bound to them.
               </p>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {!compact && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setShowExport(true)}
-                title="Reveal & export private keys for backup"
-              >
-                🔑 Export keys
-              </Button>
-            )}
-            {!compact && cfg && (
-              <Button
-                size="sm"
-                variant={showPresetEditor ? "primary" : "secondary"}
-                onClick={() => setShowPresetEditor((s) => !s)}
-              >
-                {showPresetEditor ? "Close" : "Customize buttons"}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant={editingTemplates ? "primary" : "secondary"}
+                  onClick={() => setEditingTemplates((s) => !s)}
+                  title="Edit shared profile templates (affects every wallet bound to them)"
+                >
+                  {editingTemplates ? "✓ Done" : "✎ Edit templates"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setShowExport(true)}
+                  title="Reveal & export private keys for backup"
+                >
+                  🔑 Export keys
+                </Button>
+              </>
             )}
             <span className="text-xs text-fg-subtle font-mono">
               {wallets.length}
@@ -277,15 +328,6 @@ export function WalletPanel({
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
-        {showPresetEditor && cfg && !compact && (
-          <PresetEditor
-            initialBuy={cfg.presets.buy_presets_sol}
-            initialSell={cfg.presets.sell_presets_pct}
-            onSave={saveGlobalPresets}
-            onCancel={() => setShowPresetEditor(false)}
-          />
-        )}
-
         {/* Active mint input — global to the panel */}
         <div>
           <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1.5">
@@ -305,9 +347,22 @@ export function WalletPanel({
           </div>
         )}
 
+        {!compact && editingTemplates && (
+          <ProfileSetEditor
+            initial={templates}
+            title="Shared profile templates"
+            subtitle="Applies to every wallet bound to a template"
+            onSave={(next) => {
+              saveTemplates(next);
+              setEditingTemplates(false);
+            }}
+            onCancel={() => setEditingTemplates(false)}
+          />
+        )}
+
         <div className="space-y-3">
           {wallets.map((w) => {
-            const profiles = getProfilesFor(w.pubkey);
+            const binding = getBindingFor(w.pubkey);
             const pnl = walletPnl.get(w.pubkey);
             const busy = busyPubkey === w.pubkey;
             const fb = feedback?.pubkey === w.pubkey ? feedback.msg : null;
@@ -316,34 +371,45 @@ export function WalletPanel({
               <WalletRow
                 key={w.pubkey}
                 wallet={w}
-                profiles={profiles}
+                binding={binding}
+                templates={templates}
                 compact={compact}
                 busy={busy}
                 feedback={fb}
                 pnl={pnl}
                 balance={balance}
                 activeMint={activeMint}
-                onSelectProfile={(idx) =>
-                  patchWallet(w.pubkey, { ...profiles, selected: idx })
+                onSelectTemplate={(idx) =>
+                  patchWallet(w.pubkey, { ...binding, selected_template: idx })
+                }
+                onSelectCustom={() =>
+                  patchWallet(w.pubkey, { ...binding, selected_template: null })
                 }
                 onToggleSL={() =>
                   patchWallet(w.pubkey, {
-                    ...profiles,
-                    stop_loss_enabled: !profiles.stop_loss_enabled,
+                    ...binding,
+                    stop_loss_enabled: !binding.stop_loss_enabled,
                   })
                 }
                 onToggleTS={() =>
                   patchWallet(w.pubkey, {
-                    ...profiles,
+                    ...binding,
                     trailing_stop_pct:
-                      profiles.trailing_stop_pct == null ? 20 : null,
+                      binding.trailing_stop_pct == null ? 20 : null,
                   })
                 }
-                onSaveProfiles={(updated) =>
+                onSaveCustom={(updated) =>
                   patchWallet(w.pubkey, {
-                    ...profiles,
-                    profiles: updated,
+                    ...binding,
+                    custom: updated,
+                    selected_template: null, // saving Custom auto-binds to it
                   })
+                }
+                onSaveBuyPresets={(next) =>
+                  saveWalletPresets(w.pubkey, { buy: next })
+                }
+                onSaveSellPresets={(next) =>
+                  saveWalletPresets(w.pubkey, { sell: next })
                 }
                 onQuickBuy={(sol) => quickBuy(w, sol)}
                 onQuickSell={(pct) => quickSell(w, pct)}
@@ -360,37 +426,45 @@ export function WalletPanel({
 
 function WalletRow({
   wallet,
-  profiles,
+  binding,
+  templates,
   compact,
   busy,
   feedback,
   pnl,
   balance,
   activeMint,
-  onSelectProfile,
+  onSelectTemplate,
+  onSelectCustom,
   onToggleSL,
   onToggleTS,
-  onSaveProfiles,
+  onSaveCustom,
+  onSaveBuyPresets,
+  onSaveSellPresets,
   onQuickBuy,
   onQuickSell,
 }: {
   wallet: WalletInfo;
-  profiles: WalletExitProfiles;
+  binding: WalletProfileBinding;
+  templates: ExitProfile[];
   compact: boolean;
   busy: boolean;
   feedback: string | null;
   pnl: { realized_sol: number; trades: number; wins: number } | undefined;
   balance: number | undefined;
   activeMint: string;
-  onSelectProfile: (idx: number) => void;
+  onSelectTemplate: (idx: number) => void;
+  onSelectCustom: () => void;
   onToggleSL: () => void;
   onToggleTS: () => void;
-  onSaveProfiles: (next: ExitProfile[]) => void;
+  onSaveCustom: (next: ExitProfile) => void;
+  onSaveBuyPresets: (next: number[]) => void;
+  onSaveSellPresets: (next: number[]) => void;
   onQuickBuy: (sol: number) => void;
   onQuickSell: (pct: number) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const [editingProfiles, setEditingProfiles] = useState(false);
+  const [editingCustom, setEditingCustom] = useState(false);
   const isMaster = wallet.label === "master";
 
   async function copy() {
@@ -409,7 +483,10 @@ function WalletRow({
       ? `${realized >= 0 ? "+" : ""}${realized.toFixed(4)} SOL`
       : "—";
 
-  const activeProfile = profiles.profiles[profiles.selected];
+  const usingCustom = binding.selected_template == null;
+  const activeProfile: ExitProfile = usingCustom
+    ? binding.custom
+    : templates[binding.selected_template ?? 0] ?? binding.custom;
 
   return (
     <div
@@ -477,48 +554,29 @@ function WalletRow({
       {/* Profile + risk row */}
       <div className="mt-4">
         <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
-              Profile
-            </span>
-            {!compact && (
-              <button
-                type="button"
-                onClick={() => setEditingProfiles((s) => !s)}
-                className={cn(
-                  "rounded border px-1.5 py-0.5 text-[10px] transition-colors",
-                  editingProfiles
-                    ? "border-accent text-accent bg-accent/10"
-                    : "border-border text-fg-muted hover:text-fg hover:border-border-strong",
-                )}
-                title="customize what each profile (1–5) means for this wallet"
-              >
-                {editingProfiles ? "✓ Done" : "✎ Edit profiles"}
-              </button>
-            )}
-          </div>
-          {activeProfile && (
-            <span className="text-[10px] font-mono text-fg-muted">
-              TP +{activeProfile.take_profit_pct}% · SL{" "}
-              {profiles.stop_loss_enabled
-                ? `-${activeProfile.stop_loss_pct}%`
-                : "off"}
-              {" · "}
-              {activeProfile.max_hold_seconds}s
-            </span>
-          )}
+          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
+            Profile
+          </span>
+          <span className="text-[10px] font-mono text-fg-muted">
+            TP +{activeProfile.take_profit_pct}% · SL{" "}
+            {binding.stop_loss_enabled
+              ? `-${activeProfile.stop_loss_pct}%`
+              : "off"}
+            {" · "}
+            {activeProfile.max_hold_seconds}s
+          </span>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {profiles.profiles.map((p, idx) => {
-            const sel = profiles.selected === idx;
-            const name = p.label ?? `Profile ${idx + 1}`;
+          {templates.map((p, idx) => {
+            const sel = !usingCustom && binding.selected_template === idx;
+            const name = p.label ?? `Template ${idx + 1}`;
             return (
               <button
                 key={idx}
                 type="button"
                 disabled={busy}
-                onClick={() => onSelectProfile(idx)}
-                title={`TP +${p.take_profit_pct}% / SL -${p.stop_loss_pct}% / ${p.max_hold_seconds}s hold`}
+                onClick={() => onSelectTemplate(idx)}
+                title={`TP +${p.take_profit_pct}% / SL -${p.stop_loss_pct}% / ${p.max_hold_seconds}s hold (shared template)`}
                 className={cn(
                   "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
                   sel
@@ -530,16 +588,52 @@ function WalletRow({
               </button>
             );
           })}
+          {!compact && (
+            <div
+              className={cn(
+                "inline-flex items-center rounded-md border transition-colors",
+                usingCustom
+                  ? "border-warn bg-warn/10"
+                  : "border-dashed border-border hover:border-border-strong",
+              )}
+            >
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onSelectCustom}
+                title={`This wallet's own override (TP +${binding.custom.take_profit_pct}% / SL -${binding.custom.stop_loss_pct}% / ${binding.custom.max_hold_seconds}s)`}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium disabled:opacity-50",
+                  usingCustom ? "text-warn" : "text-fg-muted hover:text-fg",
+                )}
+              >
+                {binding.custom.label?.trim() || "Custom"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingCustom((s) => !s)}
+                className={cn(
+                  "border-l px-2 py-1.5 text-[10px] transition-colors",
+                  usingCustom
+                    ? "border-warn/40 text-warn hover:bg-warn/15"
+                    : "border-border text-fg-subtle hover:text-fg",
+                )}
+                title="edit this wallet's custom profile"
+              >
+                ✎
+              </button>
+            </div>
+          )}
         </div>
 
-        {editingProfiles && !compact && (
-          <ProfileSetEditor
-            initial={profiles.profiles}
+        {editingCustom && !compact && (
+          <SingleProfileEditor
+            initial={binding.custom}
             onSave={(next) => {
-              onSaveProfiles(next);
-              setEditingProfiles(false);
+              onSaveCustom(next);
+              setEditingCustom(false);
             }}
-            onCancel={() => setEditingProfiles(false)}
+            onCancel={() => setEditingCustom(false)}
           />
         )}
       </div>
@@ -548,15 +642,15 @@ function WalletRow({
       <div className="mt-3 flex items-center gap-3">
         <ToggleChip
           label="Stop loss"
-          on={profiles.stop_loss_enabled}
-          onLabel={`-${activeProfile?.stop_loss_pct ?? 0}%`}
+          on={binding.stop_loss_enabled}
+          onLabel={`-${activeProfile.stop_loss_pct}%`}
           onClick={onToggleSL}
           disabled={busy}
         />
         <ToggleChip
           label="Trailing stop"
-          on={profiles.trailing_stop_pct != null}
-          onLabel={`-${profiles.trailing_stop_pct}%`}
+          on={binding.trailing_stop_pct != null}
+          onLabel={`-${binding.trailing_stop_pct}%`}
           onClick={onToggleTS}
           disabled={busy}
           helper="engine support v0.1.13"
@@ -566,51 +660,27 @@ function WalletRow({
       {/* Quick-buy / quick-sell */}
       {!compact && (
         <>
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] uppercase tracking-wider text-accent">
-                Buy this wallet
-              </span>
-              {!activeMint && (
-                <span className="text-[10px] text-fg-subtle">
-                  set active mint to enable
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {profiles.buy_presets_sol.map((sol) => (
-                <Button
-                  key={sol}
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy || !activeMint}
-                  onClick={() => onQuickBuy(sol)}
-                  className="border-accent/30 bg-accent/10 text-accent hover:bg-accent/20"
-                >
-                  {sol} SOL
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="text-[10px] uppercase tracking-wider text-danger mb-2">
-              Sell this wallet's holdings
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {profiles.sell_presets_pct.map((pct) => (
-                <Button
-                  key={pct}
-                  size="sm"
-                  variant="danger"
-                  disabled={busy || !activeMint}
-                  onClick={() => onQuickSell(pct)}
-                >
-                  {pct}%
-                </Button>
-              ))}
-            </div>
-          </div>
+          <PresetRow
+            kind="buy"
+            label="Buy this wallet"
+            unit=" SOL"
+            values={binding.buy_presets_sol}
+            disabled={busy || !activeMint}
+            disabledHint={!activeMint ? "set active mint to enable" : null}
+            onAction={(v) => onQuickBuy(v)}
+            onSave={onSaveBuyPresets}
+          />
+          <PresetRow
+            kind="sell"
+            label="Sell this wallet's holdings"
+            unit="%"
+            max100
+            values={binding.sell_presets_pct}
+            disabled={busy || !activeMint}
+            disabledHint={!activeMint ? "set active mint to enable" : null}
+            onAction={(v) => onQuickSell(v)}
+            onSave={onSaveSellPresets}
+          />
         </>
       )}
 
@@ -623,12 +693,206 @@ function WalletRow({
   );
 }
 
+/// Per-wallet, per-button preset editor. In view mode each preset is a clickable
+/// Button that fires onAction. In edit mode each preset becomes a small inline
+/// chip with editable value + ✕ to remove, plus + Add to extend (max 8).
+function PresetRow({
+  kind,
+  label,
+  unit,
+  values,
+  max100,
+  disabled,
+  disabledHint,
+  onAction,
+  onSave,
+}: {
+  kind: "buy" | "sell";
+  label: string;
+  unit: string;
+  values: number[];
+  max100?: boolean;
+  disabled: boolean;
+  disabledHint: string | null;
+  onAction: (v: number) => void;
+  onSave: (next: number[]) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [drafts, setDrafts] = useState<string[]>(() => values.map(String));
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset drafts when values change externally and we're not editing.
+  useEffect(() => {
+    if (!editing) setDrafts(values.map(String));
+  }, [values, editing]);
+
+  function setDraft(i: number, v: string) {
+    setDrafts((d) => d.map((x, idx) => (idx === i ? v : x)));
+  }
+  function removeDraft(i: number) {
+    setDrafts((d) => d.filter((_, idx) => idx !== i));
+  }
+  function addDraft() {
+    if (drafts.length >= 8) return;
+    setDrafts((d) => [...d, ""]);
+  }
+
+  function save() {
+    setError(null);
+    const out: number[] = [];
+    for (let i = 0; i < drafts.length; i++) {
+      const n = parseFloat(drafts[i]);
+      if (!Number.isFinite(n) || n <= 0) {
+        return setError(`Slot ${i + 1}: must be a positive number`);
+      }
+      if (max100 && n > 100) {
+        return setError(`Slot ${i + 1}: must be ≤ 100`);
+      }
+      out.push(n);
+    }
+    if (out.length === 0) return setError("Need at least one preset");
+    onSave(out);
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDrafts(values.map(String));
+    setError(null);
+    setEditing(false);
+  }
+
+  const accent = kind === "buy" ? "text-accent" : "text-danger";
+  const accentBorder = kind === "buy" ? "border-accent/30" : "border-danger/30";
+  const accentBg = kind === "buy" ? "bg-accent/10" : "bg-danger/10";
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className={`text-[10px] uppercase tracking-wider ${accent}`}>
+          {label}
+        </span>
+        <div className="flex items-center gap-2">
+          {!editing && disabledHint && (
+            <span className="text-[10px] text-fg-subtle">{disabledHint}</span>
+          )}
+          {editing ? (
+            <>
+              <button
+                type="button"
+                onClick={cancel}
+                className="text-[10px] text-fg-subtle hover:text-fg"
+              >
+                cancel
+              </button>
+              <button
+                type="button"
+                onClick={save}
+                className="text-[10px] text-accent hover:underline"
+              >
+                ✓ done
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-[10px] text-fg-subtle hover:text-fg"
+              title="edit preset values for this wallet"
+            >
+              ✎ edit
+            </button>
+          )}
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {drafts.map((d, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md border bg-bg-raised px-2 py-1",
+                  accentBorder,
+                )}
+              >
+                <input
+                  value={d}
+                  onChange={(e) => setDraft(i, e.target.value)}
+                  inputMode="decimal"
+                  className={cn(
+                    "w-14 bg-transparent font-mono text-xs text-right focus:outline-none",
+                    accent,
+                  )}
+                />
+                <span className="font-mono text-[10px] text-fg-subtle">
+                  {unit.trim()}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeDraft(i)}
+                  className="ml-0.5 text-[10px] text-fg-subtle hover:text-danger"
+                  title="remove this preset"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            {drafts.length < 8 && (
+              <button
+                type="button"
+                onClick={addDraft}
+                className="rounded-md border border-dashed border-border bg-bg-raised px-3 py-1 text-xs text-fg-muted hover:border-border-strong hover:text-fg"
+              >
+                + add
+              </button>
+            )}
+          </div>
+          {error && (
+            <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-[11px] text-danger">
+              {error}
+            </div>
+          )}
+          <p className="text-[10px] text-fg-subtle">
+            Up to 8 presets per wallet. Each value is{" "}
+            {kind === "buy" ? "SOL spent on a buy" : "% of holdings sold"}.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {values.map((v) => (
+            <Button
+              key={v}
+              size="sm"
+              variant={kind === "buy" ? "secondary" : "danger"}
+              disabled={disabled}
+              onClick={() => onAction(v)}
+              className={
+                kind === "buy"
+                  ? `${accentBorder} ${accentBg} ${accent} hover:bg-accent/20`
+                  : ""
+              }
+            >
+              {v}
+              {unit}
+            </Button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProfileSetEditor({
   initial,
+  title,
+  subtitle,
   onSave,
   onCancel,
 }: {
   initial: ExitProfile[];
+  title?: string;
+  subtitle?: string;
   onSave: (next: ExitProfile[]) => void;
   onCancel: () => void;
 }) {
@@ -644,6 +908,19 @@ function ProfileSetEditor({
 
   function update(i: number, patch: Partial<(typeof drafts)[number]>) {
     setDrafts((d) => d.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+
+  function addRow() {
+    if (drafts.length >= 12) return;
+    setDrafts((d) => [
+      ...d,
+      { label: "", tp: "50", sl: "30", hold: "60" },
+    ]);
+  }
+
+  function removeRow(i: number) {
+    if (drafts.length <= 1) return;
+    setDrafts((d) => d.filter((_, idx) => idx !== i));
   }
 
   function submit() {
@@ -671,26 +948,27 @@ function ProfileSetEditor({
   }
 
   return (
-    <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
+    <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-accent">
-          Profiles for this wallet
+          {title ?? "Profiles for this wallet"}
         </span>
         <span className="text-[10px] text-fg-subtle">
-          changes apply on next match
+          {subtitle ?? "changes apply on next match"}
         </span>
       </div>
-      <div className="grid grid-cols-[auto_1fr_60px_60px_60px] gap-2 items-center text-[10px] text-fg-subtle uppercase tracking-wider">
+      <div className="grid grid-cols-[auto_1fr_60px_60px_60px_24px] gap-2 items-center text-[10px] text-fg-subtle uppercase tracking-wider">
         <span></span>
         <span>label</span>
         <span className="text-right">TP %</span>
         <span className="text-right">SL %</span>
         <span className="text-right">hold s</span>
+        <span></span>
       </div>
       {drafts.map((d, i) => (
         <div
           key={i}
-          className="grid grid-cols-[auto_1fr_60px_60px_60px] gap-2 items-center"
+          className="grid grid-cols-[auto_1fr_60px_60px_60px_24px] gap-2 items-center"
         >
           <span className="font-mono text-xs text-fg-muted w-5 text-center">
             {i + 1}
@@ -719,8 +997,26 @@ function ProfileSetEditor({
             inputMode="numeric"
             className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
           />
+          <button
+            type="button"
+            onClick={() => removeRow(i)}
+            disabled={drafts.length <= 1}
+            className="text-[11px] text-fg-subtle hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed"
+            title="remove this template"
+          >
+            ✕
+          </button>
         </div>
       ))}
+      {drafts.length < 12 && (
+        <button
+          type="button"
+          onClick={addRow}
+          className="w-full rounded-md border border-dashed border-border bg-bg-raised py-1.5 text-[11px] text-fg-muted hover:border-border-strong hover:text-fg"
+        >
+          + Add template
+        </button>
+      )}
       {error && (
         <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-[10px] text-danger">
           {error}
@@ -731,99 +1027,98 @@ function ProfileSetEditor({
           Cancel
         </Button>
         <Button size="sm" onClick={submit}>
-          Save profiles
+          Save
         </Button>
       </div>
     </div>
   );
 }
 
-function PresetEditor({
-  initialBuy,
-  initialSell,
+function SingleProfileEditor({
+  initial,
   onSave,
   onCancel,
 }: {
-  initialBuy: number[];
-  initialSell: number[];
-  onSave: (buy: number[], sell: number[]) => void;
+  initial: ExitProfile;
+  onSave: (next: ExitProfile) => void;
   onCancel: () => void;
 }) {
-  const [buyText, setBuyText] = useState(initialBuy.join(", "));
-  const [sellText, setSellText] = useState(initialSell.join(", "));
+  const [label, setLabel] = useState(initial.label ?? "Custom");
+  const [tp, setTp] = useState(String(initial.take_profit_pct));
+  const [sl, setSl] = useState(String(initial.stop_loss_pct));
+  const [hold, setHold] = useState(String(initial.max_hold_seconds));
   const [error, setError] = useState<string | null>(null);
-
-  function parseList(s: string): number[] | string {
-    const out: number[] = [];
-    for (const tok of s.split(/[,\s]+/).filter((x) => x.length > 0)) {
-      const n = parseFloat(tok);
-      if (!Number.isFinite(n) || n <= 0) return `"${tok}" is not a positive number`;
-      out.push(n);
-    }
-    return out;
-  }
 
   function submit() {
     setError(null);
-    const buy = parseList(buyText);
-    if (typeof buy === "string") return setError(`Buy presets: ${buy}`);
-    if (buy.length === 0 || buy.length > 8) {
-      return setError("Buy presets must have 1–8 entries.");
-    }
-    const sell = parseList(sellText);
-    if (typeof sell === "string") return setError(`Sell presets: ${sell}`);
-    if (sell.length === 0 || sell.length > 8) {
-      return setError("Sell presets must have 1–8 entries.");
-    }
-    if (sell.some((v) => v > 100)) {
-      return setError("Sell percent values must be ≤ 100.");
-    }
-    onSave(buy, sell);
+    const tpN = parseFloat(tp);
+    const slN = parseFloat(sl);
+    const holdN = parseInt(hold, 10);
+    if (!Number.isFinite(tpN) || tpN <= 0) return setError("TP must be > 0");
+    if (!Number.isFinite(slN) || slN <= 0) return setError("SL must be > 0");
+    if (!Number.isFinite(holdN) || holdN <= 0 || holdN > 600)
+      return setError("Hold must be 1..=600s");
+    onSave({
+      label: label.trim() || "Custom",
+      take_profit_pct: tpN,
+      stop_loss_pct: slN,
+      max_hold_seconds: holdN,
+    });
   }
 
   return (
-    <div className="rounded-xl border border-accent/40 bg-accent/5 p-4 space-y-3">
+    <div className="mt-3 rounded-xl border border-warn/40 bg-warn/5 p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <h4 className="font-semibold text-accent">Edit preset buttons</h4>
-        <span className="text-[10px] text-fg-subtle">applies to all wallets</span>
+        <span className="text-xs font-semibold text-warn">
+          Custom profile (this wallet only)
+        </span>
+        <span className="text-[10px] text-fg-subtle">
+          saving auto-binds the wallet to Custom
+        </span>
       </div>
-
-      <div>
-        <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1">
-          Buy SOL amounts (comma- or space-separated, up to 8)
-        </label>
+      <div className="grid grid-cols-[1fr_70px_70px_70px] gap-2 items-center text-[10px] text-fg-subtle uppercase tracking-wider">
+        <span>label</span>
+        <span className="text-right">TP %</span>
+        <span className="text-right">SL %</span>
+        <span className="text-right">hold s</span>
+      </div>
+      <div className="grid grid-cols-[1fr_70px_70px_70px] gap-2 items-center">
         <input
-          value={buyText}
-          onChange={(e) => setBuyText(e.target.value)}
-          placeholder="0.01, 0.05, 0.25, 0.5, 1, 2"
-          className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Custom"
+          className="rounded-md border border-border bg-bg-raised px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-warn"
+        />
+        <input
+          value={tp}
+          onChange={(e) => setTp(e.target.value)}
+          inputMode="decimal"
+          className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-warn"
+        />
+        <input
+          value={sl}
+          onChange={(e) => setSl(e.target.value)}
+          inputMode="decimal"
+          className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-warn"
+        />
+        <input
+          value={hold}
+          onChange={(e) => setHold(e.target.value)}
+          inputMode="numeric"
+          className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-warn"
         />
       </div>
-
-      <div>
-        <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1">
-          Sell percentages (comma- or space-separated, up to 8, each ≤ 100)
-        </label>
-        <input
-          value={sellText}
-          onChange={(e) => setSellText(e.target.value)}
-          placeholder="10, 25, 50, 75, 100"
-          className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
-        />
-      </div>
-
       {error && (
-        <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-xs text-danger">
+        <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-[10px] text-danger">
           {error}
         </div>
       )}
-
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end gap-2 pt-1">
         <Button size="sm" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
         <Button size="sm" onClick={submit}>
-          Save presets
+          Save custom
         </Button>
       </div>
     </div>
