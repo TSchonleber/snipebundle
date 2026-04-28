@@ -4,15 +4,20 @@ Pump.fun launch sniper. Rust workspace, ratatui TUI, Tauri GUI (planned).
 
 ## Status
 
-Milestone 1: scaffold + encrypted keystore + wallet generation. CLI works:
+Milestones 1 + 2 shipped. Working CLI:
 
 ```
-cargo run -- --config config.toml init
-cargo run -- --config config.toml list
-cargo run -- --config config.toml reveal
+cargo run -- init                      # generate master + N snipers, encrypt
+cargo run -- list                      # print pubkeys
+cargo run -- reveal                    # print private keys (with confirmation)
+cargo run -- listen                    # stream new pump.fun mints from WS
+cargo run -- listen --limit 20         # stream 20 then exit
+cargo run -- snipe <MINT> --sol 0.1    # build → sign → submit Jito buy bundle
+cargo run -- snipe <MINT> --wallets 0,1,2 --sol 0.05
+cargo run -- dump <MINT>               # exit positions on this mint via Jito
 ```
 
-Run mode (`run`) is a placeholder until the listener and bundler land in M2/M3.
+`run` (live TUI w/ auto-snipe) lands in M3 along with filter & targeted-dev triggers and the 60s exit watcher.
 
 ## Trigger modes
 
@@ -50,7 +55,7 @@ by Pumpportal per their docs.
 ## Roadmap
 
 - [x] M1 — scaffold, keystore, wallet gen
-- [ ] M2 — listener, bundler, Jito submit
+- [x] M2 — listener, bundler, Jito submit, manual snipe/dump CLI
 - [ ] M3 — filter/targeted-dev triggers, exit watcher, ratatui TUI
 - [ ] M4 — fund-fanout from master, balance polling
 - [ ] M5 — Tauri GUI
