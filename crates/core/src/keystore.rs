@@ -8,7 +8,6 @@ use directories::ProjectDirs;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use zeroize::Zeroize;
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -29,13 +28,7 @@ pub struct StoredKeypair {
     pub secret_b58: String,
 }
 
-impl Drop for StoredKeypair {
-    fn drop(&mut self) {
-        self.secret_b58.zeroize();
-    }
-}
-
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Keystore {
     pub master: Option<StoredKeypair>,
     pub snipers: Vec<StoredKeypair>,

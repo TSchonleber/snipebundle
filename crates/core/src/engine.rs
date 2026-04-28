@@ -6,6 +6,7 @@ use crate::keystore::Keystore;
 use crate::listener;
 use crate::types::{MintEvent, TriggerSource};
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, RwLock};
@@ -15,7 +16,7 @@ const MAX_FEED_ENTRIES: usize = 50;
 const MAX_CONCURRENT_POSITIONS: usize = 3;
 const SNIPE_COOLDOWN_MS: u64 = 4_000;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FeedEntry {
     pub mint: String,
     pub creator: String,
@@ -26,7 +27,7 @@ pub struct FeedEntry {
     pub at_ms: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ActivePosition {
     pub mint: String,
     pub trigger: TriggerSource,
@@ -37,7 +38,7 @@ pub struct ActivePosition {
     pub status: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct EngineState {
     pub feed: VecDeque<FeedEntry>,
     pub positions: Vec<ActivePosition>,
