@@ -81,6 +81,10 @@ export interface AppConfig {
   exit: ExitRule;
   wallet_exit_rules: Record<string, ExitRule>;
   wallet_profiles: Record<string, WalletExitProfiles>;
+  presets: {
+    buy_presets_sol: number[];
+    sell_presets_pct: number[];
+  };
   network: {
     rpc_url: string;
     pumpportal_ws: string;

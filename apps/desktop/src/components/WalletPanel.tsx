@@ -61,6 +61,7 @@ export function WalletPanel({
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ pubkey: string; msg: string } | null>(null);
   const [internalMint, setInternalMint] = useState("");
+  const [showPresetEditor, setShowPresetEditor] = useState(false);
 
   const activeMint = activeMintProp ?? internalMint;
   const setActiveMint = onActiveMintChange ?? setInternalMint;
@@ -124,7 +125,40 @@ export function WalletPanel({
   }, [closedPositions]);
 
   function getProfilesFor(pubkey: string): WalletExitProfiles {
-    return cfg?.wallet_profiles?.[pubkey] ?? defaultWalletProfiles();
+    const stored = cfg?.wallet_profiles?.[pubkey];
+    const defaults = defaultWalletProfiles();
+    const globalPresets = cfg?.presets;
+    // Wallet-specific presets win if explicitly set; otherwise fall back to
+    // the global presets edited from the panel header.
+    return {
+      ...defaults,
+      ...(stored ?? {}),
+      buy_presets_sol:
+        stored?.buy_presets_sol && stored.buy_presets_sol.length > 0
+          ? stored.buy_presets_sol
+          : globalPresets?.buy_presets_sol ?? defaults.buy_presets_sol,
+      sell_presets_pct:
+        stored?.sell_presets_pct && stored.sell_presets_pct.length > 0
+          ? stored.sell_presets_pct
+          : globalPresets?.sell_presets_pct ?? defaults.sell_presets_pct,
+    };
+  }
+
+  async function saveGlobalPresets(buy: number[], sell: number[]) {
+    if (!cfg) return;
+    setError(null);
+    const updated: AppConfig = {
+      ...cfg,
+      presets: { buy_presets_sol: buy, sell_presets_pct: sell },
+    };
+    try {
+      await ipc.saveConfig(updated);
+      setCfg(updated);
+      setShowPresetEditor(false);
+      onConfigChanged?.();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function patchWallet(pubkey: string, next: WalletExitProfiles) {
@@ -204,12 +238,32 @@ export function WalletPanel({
           <h3 className="font-semibold">
             {compact ? "Wallets" : "Wallet panel"}
           </h3>
-          <span className="text-xs text-fg-subtle font-mono">
-            {wallets.length} wallets
-          </span>
+          <div className="flex items-center gap-3">
+            {!compact && cfg && (
+              <button
+                type="button"
+                onClick={() => setShowPresetEditor((s) => !s)}
+                className="text-xs text-fg-muted hover:text-fg underline-offset-2 hover:underline"
+              >
+                {showPresetEditor ? "Close" : "Edit presets"}
+              </button>
+            )}
+            <span className="text-xs text-fg-subtle font-mono">
+              {wallets.length} wallets
+            </span>
+          </div>
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
+        {showPresetEditor && cfg && !compact && (
+          <PresetEditor
+            initialBuy={cfg.presets.buy_presets_sol}
+            initialSell={cfg.presets.sell_presets_pct}
+            onSave={saveGlobalPresets}
+            onCancel={() => setShowPresetEditor(false)}
+          />
+        )}
+
         {/* Active mint input — global to the panel */}
         <div>
           <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1.5">
@@ -504,6 +558,98 @@ function WalletRow({
           ✓ {feedback}
         </div>
       )}
+    </div>
+  );
+}
+
+function PresetEditor({
+  initialBuy,
+  initialSell,
+  onSave,
+  onCancel,
+}: {
+  initialBuy: number[];
+  initialSell: number[];
+  onSave: (buy: number[], sell: number[]) => void;
+  onCancel: () => void;
+}) {
+  const [buyText, setBuyText] = useState(initialBuy.join(", "));
+  const [sellText, setSellText] = useState(initialSell.join(", "));
+  const [error, setError] = useState<string | null>(null);
+
+  function parseList(s: string): number[] | string {
+    const out: number[] = [];
+    for (const tok of s.split(/[,\s]+/).filter((x) => x.length > 0)) {
+      const n = parseFloat(tok);
+      if (!Number.isFinite(n) || n <= 0) return `"${tok}" is not a positive number`;
+      out.push(n);
+    }
+    return out;
+  }
+
+  function submit() {
+    setError(null);
+    const buy = parseList(buyText);
+    if (typeof buy === "string") return setError(`Buy presets: ${buy}`);
+    if (buy.length === 0 || buy.length > 8) {
+      return setError("Buy presets must have 1–8 entries.");
+    }
+    const sell = parseList(sellText);
+    if (typeof sell === "string") return setError(`Sell presets: ${sell}`);
+    if (sell.length === 0 || sell.length > 8) {
+      return setError("Sell presets must have 1–8 entries.");
+    }
+    if (sell.some((v) => v > 100)) {
+      return setError("Sell percent values must be ≤ 100.");
+    }
+    onSave(buy, sell);
+  }
+
+  return (
+    <div className="rounded-xl border border-accent/40 bg-accent/5 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="font-semibold text-accent">Edit preset buttons</h4>
+        <span className="text-[10px] text-fg-subtle">applies to all wallets</span>
+      </div>
+
+      <div>
+        <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1">
+          Buy SOL amounts (comma- or space-separated, up to 8)
+        </label>
+        <input
+          value={buyText}
+          onChange={(e) => setBuyText(e.target.value)}
+          placeholder="0.01, 0.05, 0.25, 0.5, 1, 2"
+          className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1">
+          Sell percentages (comma- or space-separated, up to 8, each ≤ 100)
+        </label>
+        <input
+          value={sellText}
+          onChange={(e) => setSellText(e.target.value)}
+          placeholder="10, 25, 50, 75, 100"
+          className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
+
+      {error && (
+        <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-xs text-danger">
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={submit}>
+          Save presets
+        </Button>
+      </div>
     </div>
   );
 }

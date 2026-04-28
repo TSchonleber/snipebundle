@@ -19,6 +19,11 @@ pub struct Config {
     /// plus SL toggle, optional trailing-stop %, and quick-action presets.
     #[serde(default)]
     pub wallet_profiles: HashMap<String, WalletExitProfiles>,
+    /// Shared buy SOL / sell % preset arrays driving the WalletPanel quick-action
+    /// buttons. Editable from the panel; per-wallet override still possible via
+    /// `wallet_profiles[pubkey].buy_presets_sol` / `.sell_presets_pct`.
+    #[serde(default)]
+    pub presets: GlobalPresets,
     pub network: NetworkConfig,
 }
 
@@ -176,6 +181,46 @@ impl Default for WalletExitProfiles {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalPresets {
+    #[serde(default = "default_buy_presets")]
+    pub buy_presets_sol: Vec<f64>,
+    #[serde(default = "default_sell_presets")]
+    pub sell_presets_pct: Vec<f64>,
+}
+
+impl Default for GlobalPresets {
+    fn default() -> Self {
+        Self {
+            buy_presets_sol: default_buy_presets(),
+            sell_presets_pct: default_sell_presets(),
+        }
+    }
+}
+
+impl GlobalPresets {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.buy_presets_sol.is_empty() && self.buy_presets_sol.len() <= 8,
+            "presets.buy_presets_sol must have 1..=8 entries"
+        );
+        anyhow::ensure!(
+            !self.sell_presets_pct.is_empty() && self.sell_presets_pct.len() <= 8,
+            "presets.sell_presets_pct must have 1..=8 entries"
+        );
+        for v in &self.buy_presets_sol {
+            anyhow::ensure!(*v > 0.0, "presets.buy_presets_sol values must be > 0");
+        }
+        for v in &self.sell_presets_pct {
+            anyhow::ensure!(
+                *v > 0.0 && *v <= 100.0,
+                "presets.sell_presets_pct values must be 0 < x <= 100"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_rpc")]
     pub rpc_url: String,
@@ -218,6 +263,7 @@ impl Config {
         for (pubkey, profiles) in &self.wallet_profiles {
             profiles.validate(&format!("wallet_profiles.{pubkey}"))?;
         }
+        self.presets.validate()?;
         anyhow::ensure!(
             self.trigger.sol_per_snipe <= self.wallets.max_sol_per_wallet,
             "trigger.sol_per_snipe cannot exceed wallets.max_sol_per_wallet"
