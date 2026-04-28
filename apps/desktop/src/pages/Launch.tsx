@@ -101,7 +101,7 @@ export function Launch() {
   function toggleCoBuyer(pk: string) {
     if (coBuyerPicked.includes(pk)) {
       setCoBuyerPicked(coBuyerPicked.filter((p) => p !== pk));
-    } else if (coBuyerPicked.length >= 4) {
+    } else if (coBuyerPicked.length >= 25) {
       return;
     } else {
       setCoBuyerPicked([...coBuyerPicked, pk]);
@@ -300,19 +300,31 @@ export function Launch() {
               </CardHeader>
               {coBuyersEnabled && (
                 <CardBody className="space-y-4">
-                  <div className="rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs text-warn">
-                    <strong>Heads up.</strong> Co-buyers are sniper wallets
-                    you own buying alongside the dev's create in the same
-                    Jito bundle. Same-block landing makes the launch
-                    defensive against third-party snipers — but if you
-                    later dump these positions into retail buying, you're
-                    in pump-and-dump territory under pump.fun TOS and SEC
-                    Rule 10b-5. Build it intentional.
+                  <div className="rounded-lg border border-warn/40 bg-warn/5 p-3 text-xs text-warn space-y-1.5">
+                    <p>
+                      <strong>Heads up.</strong> Co-buyers are sniper wallets
+                      you own buying alongside the dev's create.
+                    </p>
+                    <p>
+                      <strong>First 4 co-buyers</strong> land same-block as
+                      the create (one Jito bundle, fully atomic).
+                    </p>
+                    <p>
+                      <strong>Co-buyers 5+</strong> land in follow-on bundles
+                      ~2s later. Curve has advanced; they pay slightly more
+                      than the first 4. Each follow-on bundle costs another
+                      Jito tip.
+                    </p>
+                    <p>
+                      Manual exits only — no auto-dump timer in this app.
+                      Dumping into retail buying would be pump-and-dump
+                      under pump.fun TOS / SEC Rule 10b-5.
+                    </p>
                   </div>
 
                   <div>
                     <div className="text-xs text-fg-subtle uppercase tracking-wider mb-2">
-                      Pick up to 4 sniper wallets
+                      Pick up to 25 sniper wallets
                     </div>
                     {snipers.length === 0 ? (
                       <p className="text-sm text-fg-subtle">
@@ -358,7 +370,13 @@ export function Launch() {
                       </div>
                     )}
                     <p className="mt-2 text-xs text-fg-subtle font-mono">
-                      {coBuyerPicked.length} / 4 selected
+                      {coBuyerPicked.length} / 25 selected
+                      {coBuyerPicked.length > 4 && (
+                        <span className="ml-2 text-warn">
+                          → {1 + Math.ceil((coBuyerPicked.length - 4) / 5)}{" "}
+                          bundles ({1 + Math.ceil((coBuyerPicked.length - 4) / 5)}× Jito tip)
+                        </span>
+                      )}
                     </p>
                   </div>
 
@@ -593,7 +611,41 @@ function LaunchResultCard({ result }: { result: LaunchResult }) {
         <Row label="Dev buy">{result.dev_buy_sol} SOL</Row>
         {result.co_buyer_count > 0 && (
           <Row label={`Co-buyers (${result.co_buyer_count})`}>
-            {result.co_buyer_total_sol.toFixed(4)} SOL total
+            <div className="space-y-1.5">
+              <div>{result.co_buyer_total_sol.toFixed(4)} SOL total</div>
+              {(result.follow_on_bundle_ids?.length ?? 0) > 0 && (
+                <div className="text-xs text-fg-muted">
+                  {result.follow_on_bundle_ids!.length} follow-on bundle
+                  {result.follow_on_bundle_ids!.length === 1 ? "" : "s"}:
+                  <ul className="mt-1 space-y-0.5">
+                    {result.follow_on_bundle_ids!.map((id) => (
+                      <li key={id}>
+                        <a
+                          href={`https://explorer.jito.wtf/bundle/${id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-[10px] text-accent hover:underline"
+                        >
+                          {id}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(result.follow_on_errors?.length ?? 0) > 0 && (
+                <div className="text-xs text-danger">
+                  Follow-on errors:{" "}
+                  <ul className="mt-1 space-y-0.5">
+                    {result.follow_on_errors!.map((e, i) => (
+                      <li key={i} className="font-mono text-[10px]">
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </Row>
         )}
         <Row label="Metadata">

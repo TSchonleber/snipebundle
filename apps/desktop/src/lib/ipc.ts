@@ -42,6 +42,8 @@ export interface LaunchArgs {
 export interface LaunchResult {
   mint: string;
   bundle_id: string;
+  follow_on_bundle_ids?: string[];
+  follow_on_errors?: string[];
   metadata_uri: string;
   dev_pubkey: string;
   dev_buy_sol: number;
