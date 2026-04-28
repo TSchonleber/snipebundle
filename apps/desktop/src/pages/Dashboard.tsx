@@ -12,11 +12,15 @@ type _unused = EngineState;
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { SniperSettings } from "../components/SniperSettings";
+import { WalletPanel } from "../components/WalletPanel";
+import type { WalletInfo } from "@snipebundle/ui";
 
 export function Dashboard() {
   const [state, setState] = useState<EngineState | null>(null);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allWallets, setAllWallets] = useState<WalletInfo[]>([]);
+  const [activeMint, setActiveMint] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -35,6 +39,15 @@ export function Dashboard() {
       mounted = false;
       if (timer) clearTimeout(timer);
     };
+  }, []);
+
+  useEffect(() => {
+    Promise.all([
+      ipc.listWallets(),
+      ipc.listDevWallets().catch(() => [] as WalletInfo[]),
+    ])
+      .then(([base, devs]) => setAllWallets([...base, ...devs]))
+      .catch(() => {});
   }, []);
 
   async function start() {
@@ -223,6 +236,15 @@ export function Dashboard() {
               </CardBody>
             </Card>
             <SniperSettings />
+            {allWallets.length > 0 && (
+              <WalletPanel
+                wallets={allWallets}
+                closedPositions={state?.closed_positions}
+                mode="compact"
+                activeMint={activeMint}
+                onActiveMintChange={setActiveMint}
+              />
+            )}
           </aside>
         </div>
       </div>

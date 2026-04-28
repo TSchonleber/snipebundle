@@ -39,6 +39,22 @@ export interface ExitRule {
   max_hold_seconds: number;
 }
 
+export interface ExitProfile {
+  label: string | null;
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  max_hold_seconds: number;
+}
+
+export interface WalletExitProfiles {
+  profiles: ExitProfile[];
+  selected: number;
+  stop_loss_enabled: boolean;
+  trailing_stop_pct: number | null;
+  buy_presets_sol: number[];
+  sell_presets_pct: number[];
+}
+
 export interface AppConfig {
   wallets: {
     count: number;
@@ -64,6 +80,7 @@ export interface AppConfig {
   };
   exit: ExitRule;
   wallet_exit_rules: Record<string, ExitRule>;
+  wallet_profiles: Record<string, WalletExitProfiles>;
   network: {
     rpc_url: string;
     pumpportal_ws: string;

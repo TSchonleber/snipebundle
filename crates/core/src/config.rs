@@ -11,8 +11,14 @@ pub struct Config {
     pub auto: AutoFilters,
     pub targeted: TargetedConfig,
     pub exit: ExitConfig,
+    /// Legacy single-rule-per-wallet (v0.1.10). Read for backwards compat
+    /// when `wallet_profiles` is absent for the same pubkey.
     #[serde(default)]
     pub wallet_exit_rules: HashMap<String, ExitConfig>,
+    /// New as of v0.1.12: 5 named profiles per wallet, with a selected index,
+    /// plus SL toggle, optional trailing-stop %, and quick-action presets.
+    #[serde(default)]
+    pub wallet_profiles: HashMap<String, WalletExitProfiles>,
     pub network: NetworkConfig,
 }
 
@@ -75,6 +81,101 @@ pub struct ExitConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExitProfile {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default = "default_take_profit")]
+    pub take_profit_pct: f64,
+    #[serde(default = "default_stop_loss")]
+    pub stop_loss_pct: f64,
+    #[serde(default = "default_max_hold")]
+    pub max_hold_seconds: u64,
+}
+
+impl ExitProfile {
+    pub fn to_exit_config(&self) -> ExitConfig {
+        ExitConfig {
+            take_profit_pct: self.take_profit_pct,
+            stop_loss_pct: self.stop_loss_pct,
+            max_hold_seconds: self.max_hold_seconds,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletExitProfiles {
+    /// Up to 5 named profiles. `default_profiles()` seeds 5 sensible defaults
+    /// (Conservative / Standard / Aggressive / Moonshot / Manual).
+    #[serde(default = "default_profiles")]
+    pub profiles: Vec<ExitProfile>,
+    /// Index into `profiles` for the currently active rule.
+    #[serde(default = "default_selected_profile")]
+    pub selected: usize,
+    #[serde(default = "default_true")]
+    pub stop_loss_enabled: bool,
+    /// None = trailing stop disabled. Engine support lands in v0.1.13.
+    #[serde(default)]
+    pub trailing_stop_pct: Option<f64>,
+    /// Quick-action SOL amounts shown as buttons in the Wallets row.
+    #[serde(default = "default_buy_presets")]
+    pub buy_presets_sol: Vec<f64>,
+    /// Quick-action sell percentages shown as buttons in the Wallets row.
+    #[serde(default = "default_sell_presets")]
+    pub sell_presets_pct: Vec<f64>,
+}
+
+impl WalletExitProfiles {
+    pub fn active(&self) -> ExitConfig {
+        self.profiles
+            .get(self.selected)
+            .map(|p| p.to_exit_config())
+            .unwrap_or_else(|| ExitConfig {
+                take_profit_pct: default_take_profit(),
+                stop_loss_pct: default_stop_loss(),
+                max_hold_seconds: default_max_hold(),
+            })
+    }
+
+    pub fn validate(&self, label: &str) -> Result<()> {
+        anyhow::ensure!(
+            !self.profiles.is_empty() && self.profiles.len() <= 5,
+            "{label}.profiles must have 1..=5 entries (got {})",
+            self.profiles.len()
+        );
+        anyhow::ensure!(
+            self.selected < self.profiles.len(),
+            "{label}.selected ({}) out of range 0..{}",
+            self.selected,
+            self.profiles.len()
+        );
+        for (i, p) in self.profiles.iter().enumerate() {
+            p.to_exit_config()
+                .validate(&format!("{label}.profiles[{i}]"))?;
+        }
+        if let Some(ts) = self.trailing_stop_pct {
+            anyhow::ensure!(
+                ts > 0.0 && ts < 100.0,
+                "{label}.trailing_stop_pct must be 0 < x < 100"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletExitProfiles {
+    fn default() -> Self {
+        Self {
+            profiles: default_profiles(),
+            selected: default_selected_profile(),
+            stop_loss_enabled: true,
+            trailing_stop_pct: None,
+            buy_presets_sol: default_buy_presets(),
+            sell_presets_pct: default_sell_presets(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_rpc")]
     pub rpc_url: String,
@@ -114,6 +215,9 @@ impl Config {
         for (pubkey, rule) in &self.wallet_exit_rules {
             rule.validate(&format!("wallet_exit_rules.{pubkey}"))?;
         }
+        for (pubkey, profiles) in &self.wallet_profiles {
+            profiles.validate(&format!("wallet_profiles.{pubkey}"))?;
+        }
         anyhow::ensure!(
             self.trigger.sol_per_snipe <= self.wallets.max_sol_per_wallet,
             "trigger.sol_per_snipe cannot exceed wallets.max_sol_per_wallet"
@@ -122,10 +226,16 @@ impl Config {
     }
 
     pub fn exit_for_wallet(&self, pubkey: &str) -> ExitConfig {
-        self.wallet_exit_rules
-            .get(pubkey)
-            .cloned()
-            .unwrap_or_else(|| self.exit.clone())
+        // v0.1.12 profile system wins
+        if let Some(profiles) = self.wallet_profiles.get(pubkey) {
+            return profiles.active();
+        }
+        // legacy single-rule
+        if let Some(rule) = self.wallet_exit_rules.get(pubkey) {
+            return rule.clone();
+        }
+        // global fallback
+        self.exit.clone()
     }
 }
 
@@ -147,54 +257,64 @@ impl ExitConfig {
     }
 }
 
-fn default_wallet_count() -> u32 {
-    5
+fn default_wallet_count() -> u32 { 5 }
+fn default_max_sol_per_wallet() -> f64 { 1.0 }
+fn default_master_reserve() -> f64 { 0.05 }
+fn default_true() -> bool { true }
+fn default_sol_per_snipe() -> f64 { 0.5 }
+fn default_min_dev_buy() -> f64 { 5.0 }
+fn default_max_entry_mc() -> f64 { 50.0 }
+fn default_take_profit() -> f64 { 50.0 }
+fn default_stop_loss() -> f64 { 30.0 }
+fn default_max_hold() -> u64 { 60 }
+fn default_selected_profile() -> usize { 1 } // "Standard" by default
+fn default_rpc() -> String { "https://api.mainnet-beta.solana.com".into() }
+fn default_ws() -> String { "wss://pumpportal.fun/api/data".into() }
+fn default_trade_local() -> String { "https://pumpportal.fun/api/trade-local".into() }
+fn default_jito() -> String { "https://mainnet.block-engine.jito.wtf/api/v1/bundles".into() }
+fn default_jito_tip() -> f64 { 0.001 }
+fn default_priority_fee() -> f64 { 0.0001 }
+fn default_slippage() -> u32 { 5000 }
+
+fn default_profiles() -> Vec<ExitProfile> {
+    vec![
+        ExitProfile {
+            label: Some("Conservative".into()),
+            take_profit_pct: 25.0,
+            stop_loss_pct: 15.0,
+            max_hold_seconds: 60,
+        },
+        ExitProfile {
+            label: Some("Standard".into()),
+            take_profit_pct: 50.0,
+            stop_loss_pct: 30.0,
+            max_hold_seconds: 60,
+        },
+        ExitProfile {
+            label: Some("Aggressive".into()),
+            take_profit_pct: 100.0,
+            stop_loss_pct: 50.0,
+            max_hold_seconds: 120,
+        },
+        ExitProfile {
+            label: Some("Moonshot".into()),
+            take_profit_pct: 500.0,
+            stop_loss_pct: 70.0,
+            max_hold_seconds: 300,
+        },
+        ExitProfile {
+            label: Some("Manual".into()),
+            take_profit_pct: 9999.0,
+            stop_loss_pct: 99.0,
+            max_hold_seconds: 600,
+        },
+    ]
 }
-fn default_max_sol_per_wallet() -> f64 {
-    1.0
+
+fn default_buy_presets() -> Vec<f64> {
+    vec![0.01, 0.05, 0.25, 0.5, 2.0]
 }
-fn default_master_reserve() -> f64 {
-    0.05
-}
-fn default_true() -> bool {
-    true
-}
-fn default_sol_per_snipe() -> f64 {
-    0.5
-}
-fn default_min_dev_buy() -> f64 {
-    5.0
-}
-fn default_max_entry_mc() -> f64 {
-    50.0
-}
-fn default_take_profit() -> f64 {
-    50.0
-}
-fn default_stop_loss() -> f64 {
-    30.0
-}
-fn default_max_hold() -> u64 {
-    60
-}
-fn default_rpc() -> String {
-    "https://api.mainnet-beta.solana.com".into()
-}
-fn default_ws() -> String {
-    "wss://pumpportal.fun/api/data".into()
-}
-fn default_trade_local() -> String {
-    "https://pumpportal.fun/api/trade-local".into()
-}
-fn default_jito() -> String {
-    "https://mainnet.block-engine.jito.wtf/api/v1/bundles".into()
-}
-fn default_jito_tip() -> f64 {
-    0.001
-}
-fn default_priority_fee() -> f64 {
-    0.0001
-}
-fn default_slippage() -> u32 {
-    5000
+
+fn default_sell_presets() -> Vec<f64> {
+    vec![25.0, 50.0, 75.0, 100.0]
 }

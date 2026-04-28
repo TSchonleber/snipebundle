@@ -5,6 +5,7 @@ import { WalletGrid } from "../components/WalletGrid";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
 import { WalletManager } from "../components/WalletManager";
+import { WalletPanel } from "../components/WalletPanel";
 
 const DEFAULT_PER_WALLET = 0.55;
 
@@ -66,6 +67,12 @@ export function Wallets() {
         <div className="mt-6">
           <WalletGrid wallets={wallets} recommendedSol={recommended} />
         </div>
+
+        {wallets.length > 0 && (
+          <div className="mt-6">
+            <WalletPanel wallets={wallets} mode="full" onConfigChanged={load} />
+          </div>
+        )}
 
         {wallets.length > 0 && (
           <div className="mt-6">
