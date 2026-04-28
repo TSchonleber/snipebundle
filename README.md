@@ -1,72 +1,101 @@
 # snipebundle
 
-Pump.fun launch sniper. Rust workspace, ratatui TUI, Tauri GUI (planned).
+Pump.fun launch sniper. Desktop app + marketing/live-feed site.
+
+## Repo layout
+
+```
+snipebundle/
+├── apps/
+│   ├── desktop/              # Tauri 2 desktop app — the actual product
+│   │   ├── src/              # React + Vite frontend
+│   │   └── src-tauri/        # Rust IPC layer (workspace member)
+│   └── web/                  # Next.js 15 site, deploys to Vercel
+│       ├── app/              # landing, /live, /demo, /download
+│       └── ...
+├── packages/
+│   └── ui/                   # shared React components + Tailwind preset + TS types
+├── crates/
+│   ├── core/                 # Rust core: keystore, listener, bundler, engine, exit
+│   └── tui/                  # ratatui dev/admin TUI
+├── package.json              # pnpm workspace root
+├── pnpm-workspace.yaml
+├── turbo.json
+└── Cargo.toml                # Rust workspace
+```
+
+## Quickstart (developers)
+
+Prereqs: Node ≥20, pnpm ≥9, Rust ≥1.80, on macOS optionally Xcode CLT.
+For Tauri builds: see <https://v2.tauri.app/start/prerequisites/>.
+
+```bash
+# install npm packages
+pnpm install
+
+# run the marketing site (http://localhost:3000)
+pnpm dev:web
+
+# run the desktop app in Tauri dev mode (auto-spins Vite at :5173)
+pnpm tauri:dev
+
+# rust-only TUI for hot-path development
+cargo run -p snipebundle-tui -- --config config.toml run
+```
+
+## Building installers
+
+The desktop app produces native installers:
+
+```bash
+pnpm tauri:build
+```
+
+Outputs go to `apps/desktop/src-tauri/target/release/bundle/`:
+- macOS: `.dmg` and `.app`
+- Windows: `.msi` (WiX) and `.exe` (NSIS) — only when built on Windows
+- Linux: `.AppImage` and `.deb` — only when built on Linux
+
+Cross-platform builds run via GitHub Actions on tag push (see
+`.github/workflows/release.yml` once added).
+
+## Deploying the site
+
+The site lives at `apps/web` and deploys to Vercel. Point Vercel at the repo,
+set **Root Directory** = `apps/web`, framework = Next.js. The included
+`vercel.json` handles the monorepo build (`pnpm install` at the workspace root,
+then `pnpm --filter snipebundle-web build`).
+
+## Architecture decisions
+
+- **No custody, ever.** The site is marketing + a public live-feed; the actual
+  sniper is a desktop app with keys on the user's disk. Going custodial would
+  pull us into MSB / broker-dealer regulation territory. Decision logged to
+  brainctl id 142.
+- **Same React component library powers both.** `packages/ui` is consumed by
+  `apps/web` (Next.js) and `apps/desktop` (Vite + Tauri). Marketing previews
+  look 1:1 with the real product.
+- **Rust core is reusable.** `crates/core` powers the Tauri backend, the
+  ratatui dev TUI, and CI tools. WebSocket listener, Jito bundler, encrypted
+  keystore, engine — all in one place.
 
 ## Status
 
-Milestones 1 + 2 shipped. Working CLI:
+- [x] M1 — Rust scaffold, encrypted keystore, wallet generation
+- [x] M2 — Pumpportal WS listener, Jito bundler, manual snipe/dump CLI
+- [x] M3 — Engine, auto + targeted-dev triggers, time-based 60s exit, ratatui
+- [x] M5a — Tauri 2 GUI scaffold + IPC commands wrapping core
+- [x] M5b — pnpm/turbo monorepo, Next.js web (landing, /live, /demo, /download),
+       desktop frontend wizard (welcome → wallets → funding → mode → dashboard),
+       shared `@snipebundle/ui` component library
+- [ ] M5c — wire actual installer artifacts (icons, GitHub Actions release)
+- [ ] M6 — TP/SL via per-position price polling
+- [ ] M7 — fund-fanout from master, balance polling, in-app updater
 
-```
-cargo run -- init                      # generate master + N snipers, encrypt
-cargo run -- list                      # print pubkeys
-cargo run -- reveal                    # print private keys (with confirmation)
-cargo run -- listen                    # stream new pump.fun mints from WS
-cargo run -- listen --limit 20         # stream 20 then exit
-cargo run -- snipe <MINT> --sol 0.1    # build → sign → submit Jito buy bundle
-cargo run -- snipe <MINT> --wallets 0,1,2 --sol 0.05
-cargo run -- dump <MINT>               # exit positions on this mint via Jito
-cargo run -- auto                      # headless auto-sniper (filters + 60s exit)
-cargo run -- run                       # live ratatui TUI with feed + positions
-```
+## Repos / hosting
 
-In the TUI: `q` quit, `p` pause auto-fire (still streams feed).
+- Source: <https://github.com/TSchonleber/snipebundle> (private)
+- Web: deploys to Vercel (point at `apps/web`)
+- Desktop installers: GitHub Releases (`apps/desktop/src-tauri/target/release/bundle/`)
 
-## Trigger modes
-
-- **Auto** — listens to every new pump.fun mint, snipes when filters pass
-  (`min_dev_buy_pct`, `require_socials`, `max_entry_mc_sol`, funder blacklist).
-- **Targeted Dev** — watchlist of dev wallet addresses; the moment any of them
-  creates a token, the bundle ships. Bypasses auto filters by default.
-
-Both feed the same execute pipeline: build bundle → sign → submit Jito → exit watcher.
-
-## Limits
-
-- 1–10 sniper wallets per session
-- 5 SOL per wallet hard cap
-- 60s default max hold (capped at 600)
-- 5 transactions per Jito bundle (Pumpportal API ceiling)
-
-## Funding
-
-Direct fan-out from master wallet. No mixer. Fund the master with SOL,
-the app splits to snipers in one batch tx with a configurable reserve.
-
-## Hot path
-
-```
-pumpportal WS  →  filter / watchlist match  →  POST /api/trade-local
-              →  sign N txs locally
-              →  Jito sendBundle
-              →  per-position exit watcher (TP / SL / 60s)
-```
-
-Jito tip rides on `priorityFee` of tx[0]; subsequent priorityFees are ignored
-by Pumpportal per their docs.
-
-## Roadmap
-
-- [x] M1 — scaffold, keystore, wallet gen
-- [x] M2 — listener, bundler, Jito submit, manual snipe/dump CLI
-- [x] M3a — engine: filter + targeted-dev triggers, time-based 60s exit, headless `auto`
-- [x] M3b — ratatui TUI with live feed, positions, status, pause toggle
-- [ ] M3c — TP/SL via per-position price polling (currently time-only)
-- [ ] M4 — fund-fanout from master, balance polling
-- [ ] M5 — Tauri GUI
-
-## Security
-
-- Keystore at `~/Library/Application Support/snipebundle/keystore.bin` (macOS)
-  encrypted with argon2id-derived key + chacha20-poly1305.
-- Secrets shown once at init, never logged, zeroized on drop.
-- `config.toml` and `keystore.bin` are gitignored.
+See [USER_GUIDE.md](USER_GUIDE.md) for the non-technical install + use guide.

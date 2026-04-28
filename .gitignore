@@ -1,6 +1,18 @@
+# Rust
 /target
+**/target
 **/*.rs.bk
 Cargo.lock
+
+# Node
+node_modules
+.pnpm-store
+.turbo
+.next
+dist
+build
+.vercel
+*.tsbuildinfo
 
 # never commit
 config.toml
@@ -10,3 +22,7 @@ keystore.bin
 .env
 .env.*
 !.env.example
+
+# OS
+.DS_Store
+Thumbs.db

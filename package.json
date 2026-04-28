@@ -1,0 +1,26 @@
+{
+  "name": "snipebundle",
+  "private": true,
+  "version": "0.1.0",
+  "description": "pump.fun launch sniper — desktop app + marketing site",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:web": "pnpm --filter snipebundle-web dev",
+    "dev:desktop": "pnpm --filter snipebundle-desktop dev",
+    "build": "turbo run build",
+    "build:web": "pnpm --filter snipebundle-web build",
+    "build:desktop": "pnpm --filter snipebundle-desktop build",
+    "tauri:dev": "cd apps/desktop && pnpm tauri dev",
+    "tauri:build": "cd apps/desktop && pnpm tauri build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -6,7 +6,7 @@ members = [
 ]
 # gui/src-tauri excluded from default workspace check until icons + frontend exist;
 # `cargo tauri build` from gui/ will pick it up via path.
-exclude = ["gui/src-tauri"]
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
