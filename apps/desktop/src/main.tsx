@@ -21,7 +21,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Welcome /> },
       { path: "unlock", element: <Unlock /> },
-      { path: "wallets", element: <WalletSetup /> },
+      { path: "wallet-setup", element: <WalletSetup /> },
       { path: "funding", element: <Funding /> },
       { path: "mode", element: <ModeSelect /> },
       { path: "dashboard", element: <Dashboard /> },

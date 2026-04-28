@@ -48,7 +48,7 @@ export function Welcome() {
             </span>
           </>
         ) : (
-          <Button size="lg" onClick={() => nav("/wallets")}>
+          <Button size="lg" onClick={() => nav("/wallet-setup")}>
             Get started
           </Button>
         )}
