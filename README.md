@@ -113,7 +113,10 @@ then `pnpm --filter snipebundle-web build`).
 - [x] M6.5 — manual buy/sell with wallet picker (Trade page)
 - [x] M7  — TP/SL via per-position price polling (PumpPortal subscribeTokenTrade
        per active mint), live unrealized P&L in dashboard
-- [ ] M8 — fund-fanout from master, balance polling, in-app updater
+- [x] M8  — wallet funding UX (user-driven, no fan-out): live SOL balance
+       polling per wallet, copy address + QR, status indicators on the Wallets
+       and onboarding Funding pages. snipebundle never moves SOL on the user's
+       behalf — funding source is the user's choice.
 - [ ] M9 — code-signed installers, Apple notarization, in-app updater wiring
 
 ## Repos / hosting

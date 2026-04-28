@@ -9,6 +9,7 @@ const TABS = [
   { to: "/dashboard", label: "Sniper" },
   { to: "/trade", label: "Trade" },
   { to: "/launch", label: "Launch" },
+  { to: "/wallets", label: "Wallets" },
 ];
 
 export function AppNav({ status }: AppNavProps) {

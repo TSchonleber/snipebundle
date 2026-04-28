@@ -83,4 +83,6 @@ export const ipc = {
     invoke<WalletInfo>("import_dev_wallet", { args }),
   launchToken: (args: LaunchArgs) =>
     invoke<LaunchResult>("launch_token", { args }),
+  getBalances: (pubkeys: string[]) =>
+    invoke<Record<string, number>>("get_balances", { pubkeys }),
 };

@@ -1,6 +1,6 @@
 import { Outlet, useLocation } from "react-router-dom";
 
-const APP_NAV_ROUTES = new Set(["/dashboard", "/trade", "/launch"]);
+const APP_NAV_ROUTES = new Set(["/dashboard", "/trade", "/launch", "/wallets"]);
 
 export default function App() {
   const loc = useLocation();

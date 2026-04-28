@@ -10,6 +10,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Unlock } from "./pages/Unlock";
 import { Trade } from "./pages/Trade";
 import { Launch } from "./pages/Launch";
+import { Wallets } from "./pages/Wallets";
 import "@snipebundle/ui/styles.css";
 import "./styles.css";
 
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: "dashboard", element: <Dashboard /> },
       { path: "trade", element: <Trade /> },
       { path: "launch", element: <Launch /> },
+      { path: "wallets", element: <Wallets /> },
     ],
   },
 ]);

@@ -34,6 +34,7 @@ pub fn run() {
             commands::list_dev_wallets,
             commands::import_dev_wallet,
             commands::launch_token,
+            commands::get_balances,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

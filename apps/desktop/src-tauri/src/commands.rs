@@ -1,11 +1,12 @@
 use crate::state::{AppState, EngineHandle};
 use serde::{Deserialize, Serialize};
 use snipebundle_core::{
-    bundler,
+    balance, bundler,
     keystore::{self, Keystore, StoredKeypair},
     launch::{self, LaunchMetadata, LaunchResult},
     wallet, Config, Engine, EngineState,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
@@ -338,6 +339,20 @@ pub async fn manual_dump(args: ManualSellArgs, state: State<'_, AppState>) -> Re
     bundler::execute_sell(&selected, &args.mint, &cfg.network)
         .await
         .map_err(err)
+}
+
+#[tauri::command]
+pub async fn get_balances(
+    pubkeys: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, f64>> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    Ok(balance::get_sol_balances(&cfg.network.rpc_url, &pubkeys).await)
 }
 
 fn save_to_disk(path: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {

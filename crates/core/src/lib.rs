@@ -1,3 +1,4 @@
+pub mod balance;
 pub mod config;
 pub mod keystore;
 pub mod wallet;
