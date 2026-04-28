@@ -77,6 +77,7 @@ pub async fn init_keystore(
     let ks = Keystore {
         master: Some(master.clone()),
         snipers: snipers.clone(),
+        dev_wallets: Vec::new(),
     };
     keystore::save(&path, &ks, &args.passphrase).map_err(err)?;
 
@@ -342,6 +343,109 @@ pub async fn manual_dump(args: ManualSellArgs, state: State<'_, AppState>) -> Re
         .map_err(err)
 }
 
+#[tauri::command]
+pub async fn list_dev_wallets(state: State<'_, AppState>) -> Result<Vec<WalletInfo>> {
+    let guard = state.keystore.lock().await;
+    let ks = guard.as_ref().ok_or("keystore locked")?;
+    Ok(ks
+        .dev_wallets
+        .iter()
+        .map(|w| WalletInfo {
+            label: w.label.clone(),
+            pubkey: w.pubkey.clone(),
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+pub struct ImportDevArgs {
+    pub label: String,
+    pub secret_b58: String,
+    pub passphrase: String,
+}
+
+#[tauri::command]
+pub async fn import_dev_wallet(
+    args: ImportDevArgs,
+    state: State<'_, AppState>,
+) -> Result<WalletInfo> {
+    let stored = wallet::from_b58_secret(&args.label, &args.secret_b58).map_err(err)?;
+    let info = WalletInfo {
+        label: stored.label.clone(),
+        pubkey: stored.pubkey.clone(),
+    };
+
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if ks.dev_wallets.iter().any(|w| w.pubkey == stored.pubkey)
+        || ks.snipers.iter().any(|w| w.pubkey == stored.pubkey)
+        || ks
+            .master
+            .as_ref()
+            .map(|m| m.pubkey == stored.pubkey)
+            .unwrap_or(false)
+    {
+        return Err("a wallet with that pubkey is already in the keystore".into());
+    }
+    ks.dev_wallets.push(stored);
+
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(info)
+}
+
+#[derive(Deserialize)]
+pub struct LaunchArgs {
+    pub dev_pubkey: String,
+    pub metadata: LaunchMetadata,
+    pub metadata_uri: Option<String>,
+    pub image_path: Option<String>,
+    pub dev_buy_sol: f64,
+}
+
+#[tauri::command]
+pub async fn launch_token(
+    args: LaunchArgs,
+    state: State<'_, AppState>,
+) -> Result<LaunchResult> {
+    if args.dev_buy_sol < 0.0 {
+        return Err("dev_buy_sol must be non-negative".into());
+    }
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    let dev = find_wallet(&ks, &args.dev_pubkey)
+        .ok_or_else(|| format!("no wallet in keystore with pubkey {}", args.dev_pubkey))?;
+
+    let metadata_uri = if let Some(u) = args.metadata_uri.clone() {
+        u
+    } else {
+        let img = args.image_path.as_ref().map(PathBuf::from);
+        launch::upload_metadata(&args.metadata, img.as_deref())
+            .await
+            .map_err(err)?
+    };
+
+    launch::execute_launch(
+        &dev,
+        &args.metadata,
+        &metadata_uri,
+        args.dev_buy_sol,
+        &cfg.network,
+    )
+    .await
+    .map_err(err)
+}
+
 #[derive(Deserialize)]
 pub struct FanOutArgs {
     pub recipients: Vec<String>,
@@ -387,6 +491,19 @@ pub async fn get_balances(
     Ok(balance::get_sol_balances(&cfg.network.rpc_url, &pubkeys).await)
 }
 
+fn find_wallet(ks: &Keystore, pubkey: &str) -> Option<StoredKeypair> {
+    if let Some(m) = &ks.master {
+        if m.pubkey == pubkey {
+            return Some(m.clone());
+        }
+    }
+    ks.snipers
+        .iter()
+        .chain(ks.dev_wallets.iter())
+        .find(|w| w.pubkey == pubkey)
+        .cloned()
+}
+
 fn save_to_disk(path: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {
     let toml_str = toml::to_string_pretty(cfg)?;
     std::fs::write(path, toml_str)?;
@@ -394,6 +511,6 @@ fn save_to_disk(path: &std::path::Path, cfg: &Config) -> anyhow::Result<()> {
 }
 
 fn default_config() -> Config {
-    let raw = include_str!("../../../config.example.toml");
+    let raw = include_str!("../../../../config.example.toml");
     toml::from_str(raw).expect("config.example.toml must parse")
 }
