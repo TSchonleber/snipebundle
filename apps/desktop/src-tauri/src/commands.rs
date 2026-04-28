@@ -2,6 +2,7 @@ use crate::state::{AppState, EngineHandle};
 use serde::{Deserialize, Serialize};
 use snipebundle_core::{
     balance, bundler,
+    funding::{self, FanOutResult},
     keystore::{self, Keystore, StoredKeypair},
     launch::{self, LaunchMetadata, LaunchResult},
     wallet, Config, Engine, EngineState,
@@ -337,6 +338,37 @@ pub async fn manual_dump(args: ManualSellArgs, state: State<'_, AppState>) -> Re
     }
 
     bundler::execute_sell(&selected, &args.mint, &cfg.network)
+        .await
+        .map_err(err)
+}
+
+#[derive(Deserialize)]
+pub struct FanOutArgs {
+    pub recipients: Vec<String>,
+    pub sol_per_wallet: f64,
+}
+
+#[tauri::command]
+pub async fn fan_out_from_master(
+    args: FanOutArgs,
+    state: State<'_, AppState>,
+) -> Result<FanOutResult> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    let master = ks
+        .master
+        .ok_or("no master wallet in keystore")?;
+    funding::fan_out_from_master(&master, &args.recipients, args.sol_per_wallet, &cfg.network)
         .await
         .map_err(err)
 }

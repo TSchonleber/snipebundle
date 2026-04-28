@@ -3,11 +3,14 @@ import { Card, CardBody, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { WalletGrid } from "../components/WalletGrid";
 import { AppNav } from "../components/AppNav";
+import { FanOutPanel } from "../components/FanOutPanel";
 
 const DEFAULT_PER_WALLET = 0.55;
 
 export function Wallets() {
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
+  const [master, setMaster] = useState<WalletInfo | null>(null);
+  const [snipers, setSnipers] = useState<WalletInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [recommended, setRecommended] = useState(DEFAULT_PER_WALLET);
 
@@ -21,6 +24,8 @@ export function Wallets() {
         ]);
         const all = [...base, ...devs];
         setWallets(all);
+        setMaster(base.find((w) => w.label === "master") ?? null);
+        setSnipers(base.filter((w) => w.label.startsWith("sniper")));
         const c = cfg as
           | {
               trigger?: { sol_per_snipe?: number };
@@ -59,6 +64,16 @@ export function Wallets() {
         <div className="mt-6">
           <WalletGrid wallets={wallets} recommendedSol={recommended} />
         </div>
+
+        {master && snipers.length > 0 && (
+          <div className="mt-6">
+            <FanOutPanel
+              master={master}
+              snipers={snipers}
+              recommendedSol={recommended}
+            />
+          </div>
+        )}
 
         <Card className="mt-8">
           <CardBody>

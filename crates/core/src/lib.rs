@@ -7,6 +7,7 @@ pub mod bundler;
 pub mod filters;
 pub mod exit;
 pub mod engine;
+pub mod funding;
 pub mod launch;
 pub mod price_watcher;
 pub mod types;

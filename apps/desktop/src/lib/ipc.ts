@@ -85,4 +85,14 @@ export const ipc = {
     invoke<LaunchResult>("launch_token", { args }),
   getBalances: (pubkeys: string[]) =>
     invoke<Record<string, number>>("get_balances", { pubkeys }),
+  fanOutFromMaster: (recipients: string[], solPerWallet: number) =>
+    invoke<{
+      signature: string;
+      master_pubkey: string;
+      recipients: string[];
+      sol_per_wallet: number;
+      total_sol: number;
+    }>("fan_out_from_master", {
+      args: { recipients, sol_per_wallet: solPerWallet },
+    }),
 };
