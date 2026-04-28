@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardBody, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { WalletGrid } from "../components/WalletGrid";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
+import { WalletManager } from "../components/WalletManager";
 
 const DEFAULT_PER_WALLET = 0.55;
 
@@ -14,35 +15,36 @@ export function Wallets() {
   const [error, setError] = useState<string | null>(null);
   const [recommended, setRecommended] = useState(DEFAULT_PER_WALLET);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [base, devs, cfg] = await Promise.all([
-          ipc.listWallets(),
-          ipc.listDevWallets().catch(() => [] as WalletInfo[]),
-          ipc.loadConfig().catch(() => null),
-        ]);
-        const all = [...base, ...devs];
-        setWallets(all);
-        setMaster(base.find((w) => w.label === "master") ?? null);
-        setSnipers(base.filter((w) => w.label.startsWith("sniper")));
-        const c = cfg as
-          | {
-              trigger?: { sol_per_snipe?: number };
-              network?: { jito_tip_sol?: number; priority_fee_sol?: number };
-            }
-          | null;
-        if (c?.trigger?.sol_per_snipe) {
-          const tip = c.network?.jito_tip_sol ?? 0.001;
-          const fee = c.network?.priority_fee_sol ?? 0.0001;
-          setRecommended(c.trigger.sol_per_snipe + tip + fee + 0.005);
-        }
-      } catch (e) {
-        setError(String(e));
+  const load = useCallback(async () => {
+    try {
+      const [base, devs, cfg] = await Promise.all([
+        ipc.listWallets(),
+        ipc.listDevWallets().catch(() => [] as WalletInfo[]),
+        ipc.loadConfig().catch(() => null),
+      ]);
+      const all = [...base, ...devs];
+      setWallets(all);
+      setMaster(base.find((w) => w.label === "master") ?? null);
+      setSnipers(base.filter((w) => w.label.startsWith("sniper")));
+      const c = cfg as
+        | {
+            trigger?: { sol_per_snipe?: number };
+            network?: { jito_tip_sol?: number; priority_fee_sol?: number };
+          }
+        | null;
+      if (c?.trigger?.sol_per_snipe) {
+        const tip = c.network?.jito_tip_sol ?? 0.001;
+        const fee = c.network?.priority_fee_sol ?? 0.0001;
+        setRecommended(c.trigger.sol_per_snipe + tip + fee + 0.005);
       }
+    } catch (e) {
+      setError(String(e));
     }
-    load();
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <div className="min-h-screen">
@@ -50,9 +52,9 @@ export function Wallets() {
       <div className="mx-auto max-w-5xl px-6 py-8">
         <h1 className="text-3xl font-bold tracking-tight">Wallets</h1>
         <p className="mt-2 text-fg-muted">
-          Fund each wallet from whatever source you prefer — CEX withdrawal,
-          Phantom, Solflare, hardware wallet, anything that signs Solana
-          transactions. snipebundle never moves SOL on your behalf.
+          Manage, fund, and inspect your wallets. snipebundle never moves SOL
+          on your behalf for funding — funding source is your choice (CEX
+          withdrawal, Phantom, Solflare, hardware wallet, etc).
         </p>
 
         {error && (
@@ -64,6 +66,12 @@ export function Wallets() {
         <div className="mt-6">
           <WalletGrid wallets={wallets} recommendedSol={recommended} />
         </div>
+
+        {wallets.length > 0 && (
+          <div className="mt-6">
+            <WalletManager wallets={wallets} onChanged={load} />
+          </div>
+        )}
 
         {master && snipers.length > 0 && (
           <div className="mt-6">
@@ -87,8 +95,7 @@ export function Wallets() {
                 Recommended amount per sniper ≈{" "}
                 <span className="font-mono">
                   {recommended.toFixed(3)} SOL
-                </span>
-                {" "}
+                </span>{" "}
                 (snipe size + Jito tip + priority fee + small buffer).
               </li>
               <li>
@@ -97,8 +104,7 @@ export function Wallets() {
                 can't easily group them.
               </li>
               <li>
-                The page polls Solana RPC every ~8s. New deposits show up the
-                next tick.
+                Page polls Solana RPC every ~8s. New deposits appear next tick.
               </li>
             </ul>
           </CardBody>

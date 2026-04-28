@@ -19,6 +19,7 @@ solana-sdk.workspace = true
 solana-client.workspace = true
 bs58.workspace = true
 rand.workspace = true
+rand_distr.workspace = true
 argon2.workspace = true
 chacha20poly1305.workspace = true
 zeroize.workspace = true

@@ -59,8 +59,8 @@ pub async fn init_keystore(
     if args.passphrase.len() < 12 {
         return Err("passphrase must be at least 12 characters".into());
     }
-    if args.wallet_count < 1 || args.wallet_count > 10 {
-        return Err("wallet_count must be 1..=10".into());
+    if args.wallet_count < 1 || args.wallet_count > 50 {
+        return Err("wallet_count must be 1..=50".into());
     }
 
     let path = keystore::keystore_path().map_err(err)?;
@@ -262,17 +262,24 @@ pub async fn get_state(state: State<'_, AppState>) -> Result<Option<EngineState>
 #[derive(Deserialize)]
 pub struct ManualBuyArgs {
     pub mint: String,
-    pub sol: f64,
     /// Wallet pubkeys to buy with. Each must exist in the keystore (master,
     /// snipers, or dev_wallets). Max 5 (Jito/PumpPortal bundle ceiling).
     pub wallet_pubkeys: Vec<String>,
+    pub strategy: snipebundle_core::AmountStrategy,
 }
 
 #[derive(Deserialize)]
 pub struct ManualSellArgs {
     pub mint: String,
-    /// Wallet pubkeys to sell from. Each sells 100% of its holdings of `mint`.
+    /// Wallet pubkeys to sell from. Sells `percent` of each wallet's
+    /// holdings; default 100% (all) when not provided.
     pub wallet_pubkeys: Vec<String>,
+    #[serde(default = "default_sell_pct")]
+    pub percent: f64,
+}
+
+fn default_sell_pct() -> f64 {
+    100.0
 }
 
 #[tauri::command]
@@ -306,7 +313,13 @@ pub async fn manual_snipe(
         selected.push(kp);
     }
 
-    bundler::execute_buy(&selected, &args.mint, args.sol, &cfg.network)
+    args.strategy.validate().map_err(err)?;
+    let amounts = args
+        .strategy
+        .resolve(&args.wallet_pubkeys)
+        .map_err(err)?;
+
+    bundler::execute_buy_per_wallet(&selected, &args.mint, &amounts, &cfg.network)
         .await
         .map_err(err)
 }
@@ -338,9 +351,80 @@ pub async fn manual_dump(args: ManualSellArgs, state: State<'_, AppState>) -> Re
         selected.push(kp);
     }
 
-    bundler::execute_sell(&selected, &args.mint, &cfg.network)
+    bundler::execute_sell_pct(&selected, &args.mint, args.percent, &cfg.network)
         .await
         .map_err(err)
+}
+
+#[derive(Deserialize)]
+pub struct AddSniperArgs {
+    pub passphrase: String,
+    pub label: Option<String>,
+}
+
+#[tauri::command]
+pub async fn add_sniper_wallet(
+    args: AddSniperArgs,
+    state: State<'_, AppState>,
+) -> Result<WalletWithSecret> {
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if ks.snipers.len() >= 50 {
+        return Err("sniper cap reached (50)".into());
+    }
+    let label = args.label.unwrap_or_else(|| {
+        let mut i = ks.snipers.len();
+        loop {
+            let candidate = format!("sniper-{i}");
+            if ks.snipers.iter().all(|w| w.label != candidate) {
+                return candidate;
+            }
+            i += 1;
+        }
+    });
+    let stored = wallet::generate(&label);
+    let result = WalletWithSecret {
+        label: stored.label.clone(),
+        pubkey: stored.pubkey.clone(),
+        secret_b58: stored.secret_b58.clone(),
+    };
+    ks.snipers.push(stored);
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+pub struct DeleteWalletArgs {
+    pub pubkey: String,
+    pub passphrase: String,
+}
+
+#[tauri::command]
+pub async fn delete_wallet(
+    args: DeleteWalletArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if let Some(m) = &ks.master {
+        if m.pubkey == args.pubkey {
+            return Err(
+                "master wallet cannot be deleted from the manager (would orphan funds)"
+                    .into(),
+            );
+        }
+    }
+    let before = ks.snipers.len() + ks.dev_wallets.len();
+    ks.snipers.retain(|w| w.pubkey != args.pubkey);
+    ks.dev_wallets.retain(|w| w.pubkey != args.pubkey);
+    let after = ks.snipers.len() + ks.dev_wallets.len();
+    if before == after {
+        return Err(format!("no wallet with pubkey {} in keystore", args.pubkey));
+    }
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(())
 }
 
 #[tauri::command]

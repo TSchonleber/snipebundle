@@ -47,15 +47,22 @@ export interface ImportDevArgs {
   passphrase: string;
 }
 
+export type AmountStrategy =
+  | { kind: "uniform"; sol: number }
+  | { kind: "per_wallet"; sol_per_wallet: Record<string, number> }
+  | { kind: "random"; min_sol: number; max_sol: number };
+
 export interface ManualBuyArgs {
   mint: string;
-  sol: number;
   wallet_pubkeys: string[];
+  strategy: AmountStrategy;
 }
 
 export interface ManualSellArgs {
   mint: string;
   wallet_pubkeys: string[];
+  /** Percentage of each wallet's holdings to sell (1..=100). */
+  percent?: number;
 }
 
 export const ipc = {
@@ -95,4 +102,10 @@ export const ipc = {
     }>("fan_out_from_master", {
       args: { recipients, sol_per_wallet: solPerWallet },
     }),
+  addSniperWallet: (passphrase: string, label?: string) =>
+    invoke<WalletWithSecret>("add_sniper_wallet", {
+      args: { passphrase, label },
+    }),
+  deleteWallet: (pubkey: string, passphrase: string) =>
+    invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
 };

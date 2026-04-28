@@ -1,3 +1,4 @@
+pub mod amounts;
 pub mod balance;
 pub mod config;
 pub mod keystore;
@@ -11,6 +12,8 @@ pub mod funding;
 pub mod launch;
 pub mod price_watcher;
 pub mod types;
+
+pub use amounts::AmountStrategy;
 
 pub use config::Config;
 pub use engine::{Engine, EngineState, FeedEntry, ActivePosition};

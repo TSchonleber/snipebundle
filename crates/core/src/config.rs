@@ -91,8 +91,8 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            self.wallets.count >= 1 && self.wallets.count <= 10,
-            "wallets.count must be 1..=10 (Jito bundle limit + sanity)"
+            self.wallets.count >= 1 && self.wallets.count <= 50,
+            "wallets.count must be 1..=50 (per-bundle cap is 5; keystore holds up to 50)"
         );
         anyhow::ensure!(
             self.wallets.max_sol_per_wallet > 0.0 && self.wallets.max_sol_per_wallet <= 5.0,
