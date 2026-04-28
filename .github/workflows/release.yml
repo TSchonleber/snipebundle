@@ -1,0 +1,113 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-tauri:
+    name: build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: universal-apple-darwin
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            args: "--target universal-apple-darwin"
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust-targets: ""
+            args: ""
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust-targets: ""
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: setup rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./apps/desktop/src-tauri -> target"
+          shared-key: tauri-${{ matrix.platform }}
+
+      - name: linux build deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: regenerate icons (linux/windows)
+        if: matrix.platform != 'macos-latest'
+        run: |
+          python3 tools/gen_icons.py
+
+      - name: regenerate icons + icns (macos)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          python3 tools/gen_icons.py
+          cd apps/desktop/src-tauri/icons
+          mkdir -p icon.iconset
+          for spec in "16 16x16" "32 16x16@2x" "32 32x32" "64 32x32@2x" "128 128x128" "256 128x128@2x" "256 256x256" "512 256x256@2x" "512 512x512" "1024 512x512@2x"; do
+            read px name <<< "$spec"
+            sips -z "$px" "$px" source.png --out "icon.iconset/icon_${name}.png" >/dev/null
+          done
+          iconutil -c icns icon.iconset -o icon.icns
+          rm -rf icon.iconset
+
+      - name: install npm deps
+        run: pnpm install --frozen-lockfile=false
+
+      - name: build tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "snipebundle ${{ github.ref_name }}"
+          releaseBody: |
+            ## snipebundle ${{ github.ref_name }}
+
+            Download the installer for your OS:
+            - **Windows**: `snipebundle_*.msi` or `snipebundle_*-setup.exe`
+            - **macOS**: `snipebundle_*.dmg`
+            - **Linux**: `snipebundle_*.AppImage` or `snipebundle_*.deb`
+
+            See [USER_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/USER_GUIDE.md) for setup instructions after install.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

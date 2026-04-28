@@ -45,19 +45,38 @@ cargo run -p snipebundle-tui -- --config config.toml run
 
 ## Building installers
 
-The desktop app produces native installers:
+Cross-platform builds run automatically via GitHub Actions when you push a tag:
 
 ```bash
+git tag v0.1.0 && git push origin v0.1.0
+# → CI builds .msi (Windows), .dmg (macOS universal), .AppImage + .deb (Linux)
+# → uploads them to a fresh GitHub Release named "snipebundle v0.1.0"
+```
+
+For local builds:
+
+```bash
+# regenerate placeholder icons (one-time after fresh clone)
+python3 tools/gen_icons.py
+
+# build for your current platform
 pnpm tauri:build
 ```
 
-Outputs go to `apps/desktop/src-tauri/target/release/bundle/`:
-- macOS: `.dmg` and `.app`
-- Windows: `.msi` (WiX) and `.exe` (NSIS) — only when built on Windows
-- Linux: `.AppImage` and `.deb` — only when built on Linux
+Outputs go to `apps/desktop/src-tauri/target/release/bundle/`. Cross-compiling
+to other platforms locally is fragile; just use the GitHub Actions workflow.
 
-Cross-platform builds run via GitHub Actions on tag push (see
-`.github/workflows/release.yml` once added).
+### Icons
+
+`tools/gen_icons.py` produces a placeholder logo (dark bg + accent triangle).
+When you have real brand art, replace by running:
+
+```bash
+cargo install tauri-cli --version "^2"
+cargo tauri icon path/to/real-logo.png
+```
+
+That regenerates every required size + format including macOS `.icns`.
 
 ## Deploying the site
 
@@ -88,9 +107,11 @@ then `pnpm --filter snipebundle-web build`).
 - [x] M5b — pnpm/turbo monorepo, Next.js web (landing, /live, /demo, /download),
        desktop frontend wizard (welcome → wallets → funding → mode → dashboard),
        shared `@snipebundle/ui` component library
-- [ ] M5c — wire actual installer artifacts (icons, GitHub Actions release)
+- [x] M5c — placeholder icons (`tools/gen_icons.py`), Tauri capabilities,
+       GitHub Actions release + CI workflows
 - [ ] M6 — TP/SL via per-position price polling
 - [ ] M7 — fund-fanout from master, balance polling, in-app updater
+- [ ] M8 — code-signed installers, Apple notarization, in-app updater wiring
 
 ## Repos / hosting
 

@@ -23,6 +23,10 @@ keystore.bin
 .env.*
 !.env.example
 
+# Tauri auto-generated
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/Cargo.lock
+
 # OS
 .DS_Store
 Thumbs.db
