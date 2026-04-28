@@ -113,10 +113,13 @@ then `pnpm --filter snipebundle-web build`).
 - [x] M6.5 — manual buy/sell with wallet picker (Trade page)
 - [x] M7  — TP/SL via per-position price polling (PumpPortal subscribeTokenTrade
        per active mint), live unrealized P&L in dashboard
-- [x] M8  — wallet funding UX (user-driven, no fan-out): live SOL balance
-       polling per wallet, copy address + QR, status indicators on the Wallets
-       and onboarding Funding pages. snipebundle never moves SOL on the user's
-       behalf — funding source is the user's choice.
+- [x] M8  — wallet funding UX: live SOL balance polling per wallet, copy
+       address + QR, status indicators. Two paths:
+       (a) external funding (default; user funds each wallet independently for
+       operational privacy);
+       (b) optional one-click fan-out from master (`crates/core/src/funding.rs`)
+       — plain System Program transfer, fully visible on-chain, opt-in via
+       FanOutPanel.
 - [ ] M9 — code-signed installers, Apple notarization, in-app updater wiring
 
 ## Repos / hosting
