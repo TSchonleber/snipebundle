@@ -235,21 +235,31 @@ export function WalletPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-semibold">
-            {compact ? "Wallets" : "Wallet panel"}
-          </h3>
-          <div className="flex items-center gap-3">
+          <div>
+            <h3 className="font-semibold">
+              {compact ? "Wallets" : "Wallet panel"}
+            </h3>
+            {!compact && (
+              <p className="text-xs text-fg-subtle mt-0.5">
+                Customize the buy / sell preset buttons via{" "}
+                <strong className="text-fg-muted">Customize buttons</strong>.
+                Customize what each profile (1–5) means per wallet via the ✎
+                icon next to that wallet's profile row.
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             {!compact && cfg && (
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant={showPresetEditor ? "primary" : "secondary"}
                 onClick={() => setShowPresetEditor((s) => !s)}
-                className="text-xs text-fg-muted hover:text-fg underline-offset-2 hover:underline"
               >
-                {showPresetEditor ? "Close" : "Edit presets"}
-              </button>
+                {showPresetEditor ? "Close" : "Customize buttons"}
+              </Button>
             )}
             <span className="text-xs text-fg-subtle font-mono">
-              {wallets.length} wallets
+              {wallets.length}
             </span>
           </div>
         </div>
@@ -317,6 +327,12 @@ export function WalletPanel({
                       profiles.trailing_stop_pct == null ? 20 : null,
                   })
                 }
+                onSaveProfiles={(updated) =>
+                  patchWallet(w.pubkey, {
+                    ...profiles,
+                    profiles: updated,
+                  })
+                }
                 onQuickBuy={(sol) => quickBuy(w, sol)}
                 onQuickSell={(pct) => quickSell(w, pct)}
               />
@@ -340,6 +356,7 @@ function WalletRow({
   onSelectProfile,
   onToggleSL,
   onToggleTS,
+  onSaveProfiles,
   onQuickBuy,
   onQuickSell,
 }: {
@@ -354,10 +371,12 @@ function WalletRow({
   onSelectProfile: (idx: number) => void;
   onToggleSL: () => void;
   onToggleTS: () => void;
+  onSaveProfiles: (next: ExitProfile[]) => void;
   onQuickBuy: (sol: number) => void;
   onQuickSell: (pct: number) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [editingProfiles, setEditingProfiles] = useState(false);
   const isMaster = wallet.label === "master";
 
   async function copy() {
@@ -444,9 +463,26 @@ function WalletRow({
       {/* Profile + risk row */}
       <div className="mt-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            Profile
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
+              Profile
+            </span>
+            {!compact && (
+              <button
+                type="button"
+                onClick={() => setEditingProfiles((s) => !s)}
+                className={cn(
+                  "rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+                  editingProfiles
+                    ? "border-accent text-accent bg-accent/10"
+                    : "border-border text-fg-muted hover:text-fg hover:border-border-strong",
+                )}
+                title="customize what each profile (1–5) means for this wallet"
+              >
+                {editingProfiles ? "✓ Done" : "✎ Edit profiles"}
+              </button>
+            )}
+          </div>
           {activeProfile && (
             <span className="text-[10px] font-mono text-fg-muted">
               TP +{activeProfile.take_profit_pct}% · SL{" "}
@@ -481,6 +517,17 @@ function WalletRow({
             );
           })}
         </div>
+
+        {editingProfiles && !compact && (
+          <ProfileSetEditor
+            initial={profiles.profiles}
+            onSave={(next) => {
+              onSaveProfiles(next);
+              setEditingProfiles(false);
+            }}
+            onCancel={() => setEditingProfiles(false)}
+          />
+        )}
       </div>
 
       {/* SL/TS toggles */}
@@ -558,6 +605,121 @@ function WalletRow({
           ✓ {feedback}
         </div>
       )}
+    </div>
+  );
+}
+
+function ProfileSetEditor({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: ExitProfile[];
+  onSave: (next: ExitProfile[]) => void;
+  onCancel: () => void;
+}) {
+  const [drafts, setDrafts] = useState(() =>
+    initial.map((p) => ({
+      label: p.label ?? "",
+      tp: String(p.take_profit_pct),
+      sl: String(p.stop_loss_pct),
+      hold: String(p.max_hold_seconds),
+    })),
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  function update(i: number, patch: Partial<(typeof drafts)[number]>) {
+    setDrafts((d) => d.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+
+  function submit() {
+    setError(null);
+    const out: ExitProfile[] = [];
+    for (let i = 0; i < drafts.length; i++) {
+      const d = drafts[i];
+      const tp = parseFloat(d.tp);
+      const sl = parseFloat(d.sl);
+      const hold = parseInt(d.hold, 10);
+      if (!Number.isFinite(tp) || tp <= 0)
+        return setError(`Profile ${i + 1}: TP must be > 0`);
+      if (!Number.isFinite(sl) || sl <= 0)
+        return setError(`Profile ${i + 1}: SL must be > 0`);
+      if (!Number.isFinite(hold) || hold <= 0 || hold > 600)
+        return setError(`Profile ${i + 1}: hold must be 1..=600s`);
+      out.push({
+        label: d.label.trim() || null,
+        take_profit_pct: tp,
+        stop_loss_pct: sl,
+        max_hold_seconds: hold,
+      });
+    }
+    onSave(out);
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-accent">
+          Profiles for this wallet
+        </span>
+        <span className="text-[10px] text-fg-subtle">
+          changes apply on next match
+        </span>
+      </div>
+      <div className="grid grid-cols-[auto_1fr_60px_60px_60px] gap-2 items-center text-[10px] text-fg-subtle uppercase tracking-wider">
+        <span></span>
+        <span>label</span>
+        <span className="text-right">TP %</span>
+        <span className="text-right">SL %</span>
+        <span className="text-right">hold s</span>
+      </div>
+      {drafts.map((d, i) => (
+        <div
+          key={i}
+          className="grid grid-cols-[auto_1fr_60px_60px_60px] gap-2 items-center"
+        >
+          <span className="font-mono text-xs text-fg-muted w-5 text-center">
+            {i + 1}
+          </span>
+          <input
+            value={d.label}
+            onChange={(e) => update(i, { label: e.target.value })}
+            placeholder={`Profile ${i + 1}`}
+            className="rounded-md border border-border bg-bg-raised px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+          <input
+            value={d.tp}
+            onChange={(e) => update(i, { tp: e.target.value })}
+            inputMode="decimal"
+            className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+          <input
+            value={d.sl}
+            onChange={(e) => update(i, { sl: e.target.value })}
+            inputMode="decimal"
+            className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+          <input
+            value={d.hold}
+            onChange={(e) => update(i, { hold: e.target.value })}
+            inputMode="numeric"
+            className="rounded-md border border-border bg-bg-raised px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        </div>
+      ))}
+      {error && (
+        <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-[10px] text-danger">
+          {error}
+        </div>
+      )}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={submit}>
+          Save profiles
+        </Button>
+      </div>
     </div>
   );
 }

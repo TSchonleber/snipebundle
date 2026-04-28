@@ -22,6 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }
+# Vendor OpenSSL on every platform so Windows/macOS-universal CI doesn't need
+# system openssl-dev. Solana SDK transitively pulls openssl-sys; this forces
+# it to compile from source.
+openssl-sys = { version = "0.9", features = ["vendored"] }
 anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
