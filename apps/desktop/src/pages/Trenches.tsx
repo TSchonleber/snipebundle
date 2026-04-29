@@ -10,8 +10,21 @@ import {
   setQuickBuySol,
   subscribeActiveWallet,
 } from "../lib/active-wallet";
+import {
+  isConnected as streamIsConnected,
+  onConnectivityChange,
+  onStreamEvent,
+  subscribeMigration,
+  subscribeNewToken,
+  type NewTokenEvent,
+  type MigrationEvent,
+} from "../lib/pumpportal-stream";
 
-const POLL_MS = 4_000;
+// REST is the seed + safety net (catches anything missed by the WS, refills
+// metadata for migrated coins). The realtime stream lives on top of it.
+const POLL_MS = 30_000;
+const NEW_BUCKET_CAP = 40;
+const MIGRATED_BUCKET_CAP = 40;
 
 interface Filters {
   ageMin: string; // minutes
@@ -94,6 +107,7 @@ export function Trenches() {
   });
   const [primaryWallet, setPrimaryWallet] = useState(getPrimaryWallet());
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [streamConnected, setStreamConnected] = useState(streamIsConnected());
 
   useEffect(() => {
     const unsub = subscribeActiveWallet(() =>
@@ -101,6 +115,115 @@ export function Trenches() {
     );
     return unsub;
   }, []);
+
+  // Subscribe to PumpPortal's WebSocket for new-token + migration events.
+  // The same socket is shared with PumpfunChart's per-mint trade watchers
+  // (centralized in pumpportal-stream.ts). New token launches stream into
+  // the 'new' column at sub-second latency; migrations promote to
+  // 'migrated' the instant they happen.
+  useEffect(() => {
+    const offConn = onConnectivityChange(setStreamConnected);
+    const offNew = subscribeNewToken();
+    const offMig = subscribeMigration();
+    const offEvent = onStreamEvent((ev) => {
+      if (ev.kind === "new_token") handleNewTokenEvent(ev);
+      else if (ev.kind === "migration") handleMigrationEvent(ev);
+    });
+    return () => {
+      offConn();
+      offNew();
+      offMig();
+      offEvent();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleNewTokenEvent(ev: NewTokenEvent) {
+    const coin: TrenchCoin = {
+      mint: ev.mint,
+      name: ev.name ?? null,
+      symbol: ev.symbol ?? null,
+      image_url: ev.image_uri ?? null,
+      creator: ev.creator ?? null,
+      created_at_ms: ev.received_at_ms,
+      age_minutes: 0,
+      usd_market_cap: null,
+      volume_usd_24h: null,
+      virtual_sol_reserves: ev.v_sol_in_curve ?? null,
+      virtual_token_reserves: ev.v_tokens_in_curve ?? null,
+      bonding_curve_progress_pct:
+        ev.v_sol_in_curve != null
+          ? Math.max(
+              0,
+              Math.min(100, ((ev.v_sol_in_curve - 30) / 85) * 100),
+            )
+          : 0,
+      complete: false,
+      is_currently_live: null,
+      raydium_pool: null,
+      twitter: ev.twitter ?? null,
+      telegram: ev.telegram ?? null,
+      website: ev.website ?? null,
+      reply_count: null,
+      last_trade_at_ms: ev.received_at_ms,
+    };
+    setBuckets((b) => {
+      // Skip dupes (REST seed may have just placed it).
+      if (b.new.some((c) => c.mint === coin.mint)) return b;
+      const next = [coin, ...b.new].slice(0, NEW_BUCKET_CAP);
+      return { ...b, new: next };
+    });
+    // Flash the row.
+    setHighlightUntil((m) => {
+      const next = new Map(m);
+      next.set(coin.mint, Date.now() + 2_500);
+      return next;
+    });
+  }
+
+  function handleMigrationEvent(ev: MigrationEvent) {
+    setBuckets((b) => {
+      if (b.migrated.some((c) => c.mint === ev.mint)) return b;
+      // Try to lift a richer record from new/almost so we keep metadata.
+      const lift =
+        b.new.find((c) => c.mint === ev.mint) ??
+        b.almost.find((c) => c.mint === ev.mint);
+      const coin: TrenchCoin = lift
+        ? { ...lift, complete: true, raydium_pool: ev.pool ?? null }
+        : {
+            mint: ev.mint,
+            name: null,
+            symbol: null,
+            image_url: null,
+            creator: null,
+            created_at_ms: null,
+            age_minutes: null,
+            usd_market_cap: null,
+            volume_usd_24h: null,
+            virtual_sol_reserves: null,
+            virtual_token_reserves: null,
+            bonding_curve_progress_pct: 100,
+            complete: true,
+            is_currently_live: null,
+            raydium_pool: ev.pool ?? null,
+            twitter: null,
+            telegram: null,
+            website: null,
+            reply_count: null,
+            last_trade_at_ms: ev.received_at_ms,
+          };
+      return {
+        new: b.new.filter((c) => c.mint !== ev.mint),
+        almost: b.almost.filter((c) => c.mint !== ev.mint),
+        migrated: [coin, ...b.migrated].slice(0, MIGRATED_BUCKET_CAP),
+      };
+    });
+    setHighlightUntil((m) => {
+      const next = new Map(m);
+      next.set(ev.mint, Date.now() + 3_000);
+      return next;
+    });
+  }
 
   function setColumn(key: ColumnKey, next: Partial<ColumnState>) {
     setColumnState((s) => {
@@ -212,14 +335,14 @@ export function Trenches() {
           <div className="flex items-baseline gap-3">
             <h1 className="font-mono text-base text-fg">trenches</h1>
             <span className="font-mono text-2xs text-fg-subtle">
-              // pump.fun · live · poll {POLL_MS / 1000}s
+              // pump.fun · ws stream + {POLL_MS / 1000}s rest seed
             </span>
           </div>
           <div className="flex items-center gap-3 font-mono text-2xs text-fg-subtle">
-            <LivePulse />
+            <LivePulse on={streamConnected} />
             {updatedAt && (
               <span>
-                upd {Math.max(0, Math.floor((Date.now() - updatedAt) / 1000))}
+                seed {Math.max(0, Math.floor((Date.now() - updatedAt) / 1000))}
                 s ago
               </span>
             )}
@@ -806,14 +929,27 @@ function applyFilters(coins: TrenchCoin[], f: Filters): TrenchCoin[] {
   });
 }
 
-function LivePulse() {
+function LivePulse({ on }: { on: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        on ? "text-accent" : "text-fg-subtle",
+      )}
+      title={on ? "ws live" : "reconnecting…"}
+    >
       <span className="relative inline-flex h-1.5 w-1.5">
-        <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-75 animate-ping" />
-        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+        {on && (
+          <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-75 animate-ping" />
+        )}
+        <span
+          className={cn(
+            "relative inline-flex h-1.5 w-1.5 rounded-full",
+            on ? "bg-accent" : "bg-fg-subtle/60",
+          )}
+        />
       </span>
-      <span>live</span>
+      <span>{on ? "live" : "offline"}</span>
     </span>
   );
 }

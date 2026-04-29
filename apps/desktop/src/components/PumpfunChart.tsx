@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@snipebundle/ui";
-import { ipc, type PumpChartData, type PumpTrade } from "../lib/ipc";
+import {
+  ipc,
+  type PumpChartData,
+  type PumpTrade,
+  type TrenchCoin,
+} from "../lib/ipc";
 
-const REFRESH_MS = 4_000;
+const PUMPPORTAL_WS = "wss://pumpportal.fun/api/data";
+const MAX_TRADES = 600; // ring-buffer cap so the SVG path stays cheap
 
 interface Props {
   mint: string;
@@ -10,35 +16,131 @@ interface Props {
 }
 
 /**
- * Custom SVG line chart for pre-migration pump.fun coins. Polls
- * `/trades/all/<mint>` and plots SOL-per-token over time. Used as the
- * fallback when DexScreener has no pair (which is true for any token still
- * on the bonding curve).
+ * Live SVG line chart for pre-migration pump.fun coins.
+ *
+ * Architecture:
+ *   1. On mount, fetch a one-shot history seed via /trades/all (Rust IPC).
+ *      Gives us the last ~200 trades so the chart paints something
+ *      immediately.
+ *   2. Open a WebSocket directly to PumpPortal (`wss://pumpportal.fun/api/data`)
+ *      and send `{method: 'subscribeTokenTrade', keys: [mint]}`. This is the
+ *      same channel the Rust engine uses for sniping — the protocol is
+ *      documented in pump-portal/pumpdev's data-api page.
+ *   3. Each WS trade message gets parsed into the same PumpTrade shape as
+ *      the seed and appended to a ring buffer. Chart re-renders on the
+ *      next React commit, no polling involved.
+ *   4. On mint change or unmount, the WS is closed cleanly.
+ *
+ * Falls back to the seed-only view if the WS can't connect (e.g. user is
+ * offline or PumpPortal is down).
  */
 export function PumpfunChart({ mint, height }: Props) {
-  const [data, setData] = useState<PumpChartData | null>(null);
+  const [coin, setCoin] = useState<TrenchCoin | null>(null);
+  const [trades, setTrades] = useState<PumpTrade[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
 
+  // Seed history once per mint via REST. We don't poll this — the WS keeps
+  // the buffer fresh. Only re-fires when the user pastes a different mint.
   useEffect(() => {
-    let mounted = true;
-    let timer: number | undefined;
-    async function tick() {
-      try {
-        const next = await ipc.getPumpfunChart(mint);
-        if (!mounted) return;
-        setData(next);
-        setError(null);
-      } catch (e) {
-        if (mounted) setError(String(e));
-      }
-      if (mounted) timer = window.setTimeout(tick, REFRESH_MS);
-    }
-    tick();
+    let cancelled = false;
+    setError(null);
+    setTrades([]);
+    setCoin(null);
+    ipc
+      .getPumpfunChart(mint)
+      .then((data: PumpChartData) => {
+        if (cancelled) return;
+        setCoin(data.coin);
+        setTrades(data.trades);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
     return () => {
-      mounted = false;
-      if (timer) clearTimeout(timer);
+      cancelled = true;
+    };
+  }, [mint]);
+
+  // Live trade stream via PumpPortal WS.
+  useEffect(() => {
+    if (!mint) return;
+    let ws: WebSocket | null = null;
+    let cancelled = false;
+    let reconnectTimer: number | undefined;
+
+    function connect() {
+      if (cancelled) return;
+      try {
+        ws = new WebSocket(PUMPPORTAL_WS);
+      } catch (e) {
+        setError(String(e));
+        return;
+      }
+      ws.addEventListener("open", () => {
+        if (cancelled) return;
+        setStreaming(true);
+        ws?.send(
+          JSON.stringify({
+            method: "subscribeTokenTrade",
+            keys: [mint],
+          }),
+        );
+      });
+      ws.addEventListener("message", (ev) => {
+        if (cancelled) return;
+        const trade = parseTradeEvent(mint, ev.data);
+        if (trade) appendTrade(trade);
+      });
+      ws.addEventListener("close", () => {
+        if (cancelled) return;
+        setStreaming(false);
+        // Reconnect with a small backoff so a flaky network doesn't burn
+        // the chart permanently.
+        reconnectTimer = window.setTimeout(connect, 1500);
+      });
+      ws.addEventListener("error", () => {
+        // Let close handler drive the reconnect; just log it.
+        setStreaming(false);
+      });
+    }
+
+    function appendTrade(t: PumpTrade) {
+      setTrades((prev) => {
+        // Drop dupes on signature when the seed and the WS overlap on the
+        // same trade (the WS sometimes replays a recent one on subscribe).
+        if (
+          prev.length > 0 &&
+          prev[prev.length - 1].timestamp_ms === t.timestamp_ms &&
+          prev[prev.length - 1].user === t.user
+        ) {
+          return prev;
+        }
+        const next = [...prev, t];
+        return next.length > MAX_TRADES
+          ? next.slice(next.length - MAX_TRADES)
+          : next;
+      });
+    }
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try {
+        ws?.send(
+          JSON.stringify({
+            method: "unsubscribeTokenTrade",
+            keys: [mint],
+          }),
+        );
+      } catch {
+        /* socket may already be closing */
+      }
+      ws?.close();
+      setStreaming(false);
     };
   }, [mint]);
 
@@ -54,21 +156,20 @@ export function PumpfunChart({ mint, height }: Props) {
   }, []);
 
   const chart = useMemo(
-    () => buildChart(data?.trades ?? [], width, height - 56),
-    [data, width, height],
+    () => buildChart(trades, width, height - 56),
+    [trades, width, height],
   );
 
-  const last = data?.trades.length ? data.trades[data.trades.length - 1] : null;
-  const first = data?.trades.length ? data.trades[0] : null;
+  const last = trades.length ? trades[trades.length - 1] : null;
+  const first = trades.length ? trades[0] : null;
   const change =
     last && first && first.price_sol > 0
       ? ((last.price_sol - first.price_sol) / first.price_sol) * 100
       : null;
-  const coin = data?.coin ?? null;
 
   return (
     <div ref={wrapRef} className="flex flex-col h-full">
-      {/* Stat strip — last price, MC, change %, # trades */}
+      {/* Stat strip */}
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5 gap-3 flex-wrap">
         <div className="flex items-center gap-3 font-mono text-2xs">
           {coin?.symbol && (
@@ -92,7 +193,7 @@ export function PumpfunChart({ mint, height }: Props) {
             }
           />
           <Stat
-            label="24h"
+            label="window"
             value={
               change == null
                 ? "—"
@@ -106,10 +207,7 @@ export function PumpfunChart({ mint, height }: Props) {
                   : "text-danger"
             }
           />
-          <Stat
-            label="trades"
-            value={String(data?.trades.length ?? 0)}
-          />
+          <Stat label="trades" value={String(trades.length)} />
           {coin?.bonding_curve_progress_pct != null && (
             <Stat
               label="curve"
@@ -122,23 +220,21 @@ export function PumpfunChart({ mint, height }: Props) {
             />
           )}
         </div>
-        <div className="font-mono text-2xs text-fg-subtle">
-          {data?.is_pre_migration === false
-            ? "graduated · raydium"
-            : "live · pump.fun bonding curve"}
-        </div>
+        <StreamPulse on={streaming} />
       </div>
 
       {/* SVG canvas */}
       <div className="flex-1 min-h-0 relative bg-bg-subtle/20">
-        {error && !data && (
+        {error && trades.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center font-mono text-2xs text-danger">
             {error}
           </div>
         )}
-        {!error && (data?.trades.length ?? 0) === 0 && (
+        {!error && trades.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center font-mono text-2xs text-fg-subtle">
-            no trades yet — waiting for the first buy…
+            {streaming
+              ? "subscribed · waiting for first trade…"
+              : "loading trades…"}
           </div>
         )}
         {chart && (
@@ -148,7 +244,6 @@ export function PumpfunChart({ mint, height }: Props) {
             className="block"
             preserveAspectRatio="none"
           >
-            {/* Subtle horizontal gridlines */}
             <g stroke="#1c1d24" strokeWidth="1">
               {[0.25, 0.5, 0.75].map((f) => (
                 <line
@@ -160,13 +255,11 @@ export function PumpfunChart({ mint, height }: Props) {
                 />
               ))}
             </g>
-            {/* Filled area under the line */}
             <path
               d={chart.areaPath}
               fill="rgba(95,227,154,0.10)"
               stroke="none"
             />
-            {/* Price line */}
             <path
               d={chart.linePath}
               fill="none"
@@ -175,7 +268,6 @@ export function PumpfunChart({ mint, height }: Props) {
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-            {/* Buy / sell trade markers */}
             {chart.markers.map((m, i) => (
               <circle
                 key={i}
@@ -190,6 +282,35 @@ export function PumpfunChart({ mint, height }: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function StreamPulse({ on }: { on: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 font-mono text-2xs",
+        on ? "text-accent" : "text-fg-subtle",
+      )}
+      title={
+        on
+          ? "live · subscribed to pumpportal websocket"
+          : "reconnecting to pumpportal websocket…"
+      }
+    >
+      <span className="relative inline-flex h-1.5 w-1.5">
+        {on && (
+          <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-75 animate-ping" />
+        )}
+        <span
+          className={cn(
+            "relative inline-flex h-1.5 w-1.5 rounded-full",
+            on ? "bg-accent" : "bg-fg-subtle/60",
+          )}
+        />
+      </span>
+      {on ? "live" : "reconnecting…"}
+    </span>
   );
 }
 
@@ -213,6 +334,53 @@ function Stat({
   );
 }
 
+/**
+ * Parse a single PumpPortal trade message into the PumpTrade shape we
+ * already render in the chart. Returns null for heartbeats, ack messages,
+ * and trades for other mints (the WS server occasionally bleeds those
+ * across subscriptions).
+ */
+function parseTradeEvent(targetMint: string, raw: string): PumpTrade | null {
+  let v: any;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (v?.mint !== targetMint) return null;
+  // Lamports → SOL, raw token units → tokens (pump.fun uses 6 decimals).
+  const sol_amount =
+    typeof v.solAmount === "number" ? v.solAmount : Number(v.solAmount) || 0;
+  const token_amount =
+    typeof v.tokenAmount === "number"
+      ? v.tokenAmount
+      : Number(v.tokenAmount) || 0;
+  // Curve state gives the most accurate post-trade price.
+  const v_sol = Number(v.vSolInBondingCurve);
+  const v_tok = Number(v.vTokensInBondingCurve);
+  const price_sol =
+    Number.isFinite(v_sol) && Number.isFinite(v_tok) && v_tok > 0
+      ? v_sol / v_tok
+      : token_amount > 0
+        ? sol_amount / token_amount
+        : 0;
+  const usd_market_cap =
+    typeof v.usdMarketCap === "number"
+      ? v.usdMarketCap
+      : typeof v.marketCapUsd === "number"
+        ? v.marketCapUsd
+        : null;
+  return {
+    timestamp_ms: Date.now(),
+    is_buy: String(v.txType ?? "").toLowerCase() === "buy",
+    sol_amount,
+    token_amount,
+    price_sol,
+    usd_market_cap,
+    user: v.traderPublicKey ?? v.trader ?? null,
+  };
+}
+
 function buildChart(trades: PumpTrade[], width: number, height: number) {
   if (trades.length < 2) return null;
   const prices = trades.map((t) => t.price_sol).filter((p) => p > 0);
@@ -227,7 +395,6 @@ function buildChart(trades: PumpTrade[], width: number, height: number) {
 
   const project = (t: PumpTrade) => {
     const x = ((t.timestamp_ms - xMin) / xRange) * width;
-    // Pad the y-axis a touch so highs and lows aren't pinned to the edge.
     const yPct = (t.price_sol - min) / range;
     const y = height - yPct * height * 0.94 - height * 0.03;
     return { x, y };
@@ -240,7 +407,8 @@ function buildChart(trades: PumpTrade[], width: number, height: number) {
   trades.forEach((t, i) => {
     if (t.price_sol <= 0) return;
     const { x, y } = project(t);
-    linePath += i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+    linePath +=
+      i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
     if (i === 0) areaPath += `M ${x.toFixed(1)} ${height}`;
     areaPath += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
     if (i === trades.length - 1) areaPath += ` L ${x.toFixed(1)} ${height} Z`;
