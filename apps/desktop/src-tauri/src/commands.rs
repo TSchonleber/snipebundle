@@ -783,6 +783,37 @@ pub async fn fan_out_from_master(
 }
 
 #[derive(Deserialize)]
+pub struct SendSolArgs {
+    pub source_pubkey: String,
+    pub destination: String,
+    pub sol: f64,
+}
+
+#[tauri::command]
+pub async fn send_sol(
+    args: SendSolArgs,
+    state: State<'_, AppState>,
+) -> Result<String> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    let source = find_wallet(&ks, &args.source_pubkey)
+        .ok_or_else(|| format!("wallet {} not in keystore", args.source_pubkey))?;
+    funding::send_sol(&source, &args.destination, args.sol, &cfg.network)
+        .await
+        .map_err(err)
+}
+
+#[derive(Deserialize)]
 pub struct FanOutPerWalletArgs {
     pub recipients: Vec<String>,
     pub amounts_sol: Vec<f64>,

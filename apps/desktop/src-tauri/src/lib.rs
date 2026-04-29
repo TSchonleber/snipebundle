@@ -39,6 +39,7 @@ pub fn run() {
             commands::get_balances,
             commands::fan_out_from_master,
             commands::fan_out_from_master_per_wallet,
+            commands::send_sol,
             commands::add_sniper_wallet,
             commands::delete_wallet,
             commands::get_trending,

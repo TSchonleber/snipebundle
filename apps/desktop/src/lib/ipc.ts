@@ -254,6 +254,10 @@ export const ipc = {
     }>("fan_out_from_master", {
       args: { recipients, sol_per_wallet: solPerWallet },
     }),
+  sendSol: (sourcePubkey: string, destination: string, sol: number) =>
+    invoke<string>("send_sol", {
+      args: { source_pubkey: sourcePubkey, destination, sol },
+    }),
   fanOutFromMasterPerWallet: (recipients: string[], amountsSol: number[]) =>
     invoke<{
       signature: string;

@@ -3,6 +3,7 @@ import { cn, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
+import { SendPanel } from "../components/SendPanel";
 import { WalletManager } from "../components/WalletManager";
 import { WalletPanel } from "../components/WalletPanel";
 import { ExportKeysModal } from "../components/ExportKeysModal";
@@ -152,10 +153,15 @@ export function Wallets() {
                   snipers={snipers}
                   recommendedSol={recommended}
                 />
+                <div className="mt-4">
+                  <SendPanel wallets={wallets} onComplete={load} />
+                </div>
                 <FundingNotes recommended={recommended} />
               </>
+            ) : wallets.length > 0 ? (
+              <SendPanel wallets={wallets} onComplete={load} />
             ) : (
-              <EmptyHint>need a master + at least one sniper to fan-out funding</EmptyHint>
+              <EmptyHint>no wallets in keystore yet</EmptyHint>
             )}
           </>
         )}

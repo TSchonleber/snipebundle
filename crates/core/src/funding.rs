@@ -44,6 +44,61 @@ pub struct FanOutResult {
 ///
 /// This is a single tx, not a Jito bundle — there's nothing to compete with
 /// here. Just a regular wallet-to-wallet move.
+/// Send `sol` from a single source wallet to an arbitrary destination
+/// pubkey. The dual of fan-out: lets the user consolidate sniper funds
+/// back to the master, ship profits to a CEX deposit address, or move
+/// SOL to a separate cold wallet — all from inside the app instead of
+/// having to fire up Phantom for every transfer.
+pub async fn send_sol(
+    source: &StoredKeypair,
+    destination: &str,
+    sol: f64,
+    net: &NetworkConfig,
+) -> Result<String> {
+    anyhow::ensure!(sol > 0.0, "amount must be positive");
+    let lamports = (sol * LAMPORTS_PER_SOL as f64).round() as u64;
+    anyhow::ensure!(lamports > 0, "amount {sol} rounds to zero lamports");
+
+    let source_kp = wallet::from_stored(source)?;
+    let source_pub = source_kp.pubkey();
+    let dest = Pubkey::from_str(destination)
+        .map_err(|e| anyhow!("invalid destination {destination}: {e}"))?;
+    anyhow::ensure!(
+        dest != source_pub,
+        "destination is the same as the source wallet"
+    );
+
+    #[allow(deprecated)]
+    let ix = system_instruction::transfer(&source_pub, &dest, lamports);
+
+    let client =
+        RpcClient::new_with_commitment(net.rpc_url.clone(), CommitmentConfig::confirmed());
+    let recent_blockhash = client
+        .get_latest_blockhash()
+        .await
+        .context("get latest blockhash")?;
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&source_pub),
+        &[&source_kp],
+        recent_blockhash,
+    );
+    let signature = client
+        .send_and_confirm_transaction(&tx)
+        .await
+        .context("send and confirm send-sol tx")?;
+
+    info!(
+        sig = %signature,
+        from = %source_pub,
+        to = %dest,
+        sol,
+        "send sol submitted"
+    );
+
+    Ok(signature.to_string())
+}
+
 pub async fn fan_out_from_master(
     master: &StoredKeypair,
     recipients: &[String],
