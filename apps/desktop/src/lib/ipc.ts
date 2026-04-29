@@ -46,6 +46,7 @@ export interface TrenchCoin {
   created_at_ms: number | null;
   age_minutes: number | null;
   usd_market_cap: number | null;
+  volume_usd_24h: number | null;
   virtual_sol_reserves: number | null;
   virtual_token_reserves: number | null;
   bonding_curve_progress_pct: number | null;
@@ -235,6 +236,10 @@ export const ipc = {
   listDevWallets: () => invoke<WalletInfo[]>("list_dev_wallets"),
   importDevWallet: (args: ImportDevArgs) =>
     invoke<WalletInfo>("import_dev_wallet", { args }),
+  createDevWallet: (passphrase: string, label?: string) =>
+    invoke<WalletWithSecret>("create_dev_wallet", {
+      args: { passphrase, label },
+    }),
   launchToken: (args: LaunchArgs) =>
     invoke<LaunchResult>("launch_token", { args }),
   getBalances: (pubkeys: string[]) =>

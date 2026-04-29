@@ -596,6 +596,48 @@ pub async fn list_dev_wallets(state: State<'_, AppState>) -> Result<Vec<WalletIn
 }
 
 #[derive(Deserialize)]
+pub struct CreateDevArgs {
+    pub passphrase: String,
+    pub label: Option<String>,
+}
+
+/// Generate a fresh dev wallet (keypair + label) and persist it. Used by
+/// the Launch page's "+ create dev wallet" affordance — operationally
+/// important: master should never be the dev wallet, so users need a
+/// one-click way to mint a fresh dev each launch.
+#[tauri::command]
+pub async fn create_dev_wallet(
+    args: CreateDevArgs,
+    state: State<'_, AppState>,
+) -> Result<WalletWithSecret> {
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if ks.dev_wallets.len() >= 50 {
+        return Err("dev wallet cap reached (50)".into());
+    }
+    let label = args.label.unwrap_or_else(|| {
+        let mut i = ks.dev_wallets.len();
+        loop {
+            let candidate = format!("dev-{i}");
+            if ks.dev_wallets.iter().all(|w| w.label != candidate) {
+                return candidate;
+            }
+            i += 1;
+        }
+    });
+    let stored = wallet::generate(&label);
+    let result = WalletWithSecret {
+        label: stored.label.clone(),
+        pubkey: stored.pubkey.clone(),
+        secret_b58: stored.secret_b58.clone(),
+    };
+    ks.dev_wallets.push(stored);
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(result)
+}
+
+#[derive(Deserialize)]
 pub struct ImportDevArgs {
     pub label: String,
     pub secret_b58: String,

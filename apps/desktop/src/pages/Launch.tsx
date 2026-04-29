@@ -49,6 +49,8 @@ export function Launch() {
 
   // import-dev modal
   const [showImport, setShowImport] = useState(false);
+  // create-dev modal (fresh-keypair flow — preferred over import for opsec)
+  const [showCreateDev, setShowCreateDev] = useState(false);
 
   // result
   const [busy, setBusy] = useState(false);
@@ -60,10 +62,12 @@ export function Launch() {
       ipc.listWallets(),
       ipc.listDevWallets(),
     ]);
-    const master = base.filter((w) => w.label === "master");
-    const all = [...master, ...devs];
-    setDevWallets(all);
-    if (all.length > 0 && !selectedDev) setSelectedDev(all[0].pubkey);
+    // Master is intentionally NOT a valid dev wallet. If master is doxxed
+    // as the dev, every funded sniper attached to the same keystore gets
+    // burned with it. Only the dev_wallets list is offered here, and the
+    // user is nudged to create a fresh one per launch via the button.
+    setDevWallets(devs);
+    if (devs.length > 0 && !selectedDev) setSelectedDev(devs[0].pubkey);
     setSnipers(base.filter((w) => w.label.startsWith("sniper")));
   }
 
@@ -616,8 +620,10 @@ export function Launch() {
               </CardHeader>
               <CardBody>
                 {devWallets.length === 0 ? (
-                  <p className="text-sm text-fg-subtle">
-                    No wallets in keystore yet.
+                  <p className="font-mono text-xs text-fg-muted leading-snug">
+                    no dev wallets yet — create a fresh one for this launch.
+                    your master wallet is intentionally not selectable here so
+                    a doxxed dev can't get traced back to your snipers.
                   </p>
                 ) : (
                   <select
@@ -634,11 +640,18 @@ export function Launch() {
                 )}
                 <Button
                   size="sm"
-                  variant="ghost"
                   className="mt-3 w-full"
+                  onClick={() => setShowCreateDev(true)}
+                >
+                  + Create new dev wallet
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mt-2 w-full"
                   onClick={() => setShowImport(true)}
                 >
-                  + Import dev wallet
+                  Import existing
                 </Button>
               </CardBody>
             </Card>
@@ -671,6 +684,17 @@ export function Launch() {
             onClose={() => setShowImport(false)}
             onImported={() => {
               setShowImport(false);
+              refresh();
+            }}
+          />
+        )}
+
+        {showCreateDev && (
+          <CreateDevModal
+            onClose={() => setShowCreateDev(false)}
+            onCreated={(pubkey) => {
+              setShowCreateDev(false);
+              setSelectedDev(pubkey);
               refresh();
             }}
           />
@@ -1207,6 +1231,157 @@ function ImportDevModal({
             </Button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateDevModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (pubkey: string) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Show the new keypair after creation so the user can copy/back-up the
+  // secret. Dev wallets are short-lived but losing the secret stranded
+  // pre-graduation curve allocations.
+  const [created, setCreated] = useState<{
+    label: string;
+    pubkey: string;
+    secret_b58: string;
+  } | null>(null);
+  const [secretCopied, setSecretCopied] = useState(false);
+
+  async function submit() {
+    setError(null);
+    if (!pass) return setError("Enter your keystore passphrase.");
+    setBusy(true);
+    try {
+      const w = await ipc.createDevWallet(pass, label.trim() || undefined);
+      setCreated({
+        label: w.label,
+        pubkey: w.pubkey,
+        secret_b58: w.secret_b58,
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySecret() {
+    if (!created) return;
+    try {
+      await navigator.clipboard.writeText(created.secret_b58);
+      setSecretCopied(true);
+      window.setTimeout(() => setSecretCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-6"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md border border-border bg-bg-subtle p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {!created ? (
+          <>
+            <h2 className="font-mono text-sm text-fg">create new dev wallet</h2>
+            <p className="mt-2 font-mono text-2xs text-fg-muted leading-snug">
+              fresh keypair, encrypted into your keystore. dev wallets pay
+              for the create + opening buy, then ideally get rotated each
+              launch — never reuse the same dev across launches if you can
+              help it.
+            </p>
+            <div className="mt-4 space-y-3">
+              <Field label="Label (optional)">
+                <input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="dev-N"
+                  className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+              <Field label="Keystore passphrase">
+                <input
+                  type="password"
+                  value={pass}
+                  onChange={(e) => setPass(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                  autoFocus
+                  className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </Field>
+              {error && (
+                <div className="border-l-2 border-danger bg-danger/5 px-3 py-2 font-mono text-2xs text-danger">
+                  {error}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="secondary" onClick={onClose} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button onClick={submit} disabled={busy}>
+                  {busy ? "Creating…" : "Create"}
+                </Button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="font-mono text-sm text-accent">
+              dev wallet created
+            </h2>
+            <p className="mt-2 font-mono text-2xs text-fg-muted leading-snug">
+              <span className="text-warn">back this secret up before closing.</span>{" "}
+              fund this wallet with the SOL you intend to spend on the launch
+              (create cost + opening buy + jito tip + buffer).
+            </p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="font-mono text-2xs text-fg-subtle mb-1">
+                  pubkey · {created.label}
+                </div>
+                <code className="block break-all font-mono text-xs text-fg border border-border bg-bg-raised px-3 py-2">
+                  {created.pubkey}
+                </code>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-mono text-2xs text-warn">
+                    private key (base58)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={copySecret}
+                    className="font-mono text-2xs text-accent hover:underline"
+                  >
+                    {secretCopied ? "copied" : "copy secret"}
+                  </button>
+                </div>
+                <code className="block break-all font-mono text-xs text-warn border border-warn/40 bg-warn/5 px-3 py-2">
+                  {created.secret_b58}
+                </code>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button onClick={() => onCreated(created.pubkey)}>
+                  Use this wallet
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

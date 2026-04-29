@@ -18,6 +18,8 @@ interface Filters {
   ageMax: string;
   mcMin: string; // USD
   mcMax: string;
+  volumeMin: string; // USD 24h
+  volumeMax: string;
   curveMin: string; // bonding curve %
   curveMax: string;
   repliesMin: string;
@@ -32,6 +34,8 @@ const DEFAULT_FILTERS: Filters = {
   ageMax: "",
   mcMin: "",
   mcMax: "",
+  volumeMin: "",
+  volumeMax: "",
   curveMin: "",
   curveMax: "",
   repliesMin: "",
@@ -41,10 +45,24 @@ const DEFAULT_FILTERS: Filters = {
   hasWebsite: false,
 };
 
+type ColumnKey = "new" | "almost" | "migrated";
+
+interface ColumnState {
+  filters: Filters;
+  quickBuy: number;
+}
+
+const DEFAULT_COLUMN_STATE: Record<ColumnKey, ColumnState> = {
+  new: { filters: DEFAULT_FILTERS, quickBuy: 0.05 },
+  almost: { filters: DEFAULT_FILTERS, quickBuy: 0.1 },
+  migrated: { filters: DEFAULT_FILTERS, quickBuy: 0.2 },
+};
+
 function activeFilterCount(f: Filters): number {
   let n = 0;
   if (f.ageMin || f.ageMax) n++;
   if (f.mcMin || f.mcMax) n++;
+  if (f.volumeMin || f.volumeMax) n++;
   if (f.curveMin || f.curveMax) n++;
   if (f.repliesMin) n++;
   if (f.liveOnly) n++;
@@ -63,8 +81,17 @@ export function Trenches() {
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [quickBuy, setQuickBuy] = useState(getQuickBuySol());
+  // Per-column filter + quick-buy state. Different columns warrant different
+  // defaults: 'new' bets are smaller (riskier), 'migrated' larger (more
+  // established). See DEFAULT_COLUMN_STATE.
+  const [columnState, setColumnState] = useState(() => {
+    const init = { ...DEFAULT_COLUMN_STATE };
+    // Pull last persisted quick-buy from the global helper as the initial
+    // 'new' column quickBuy so users who configured it before the per-column
+    // change get a sensible value.
+    init.new = { ...init.new, quickBuy: getQuickBuySol() };
+    return init;
+  });
   const [primaryWallet, setPrimaryWallet] = useState(getPrimaryWallet());
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -75,15 +102,19 @@ export function Trenches() {
     return unsub;
   }, []);
 
-  function commitQuickBuy(v: string) {
-    const n = parseFloat(v);
-    if (Number.isFinite(n) && n > 0) {
-      setQuickBuy(n);
-      setQuickBuySol(n);
-    }
+  function setColumn(key: ColumnKey, next: Partial<ColumnState>) {
+    setColumnState((s) => {
+      const merged = { ...s[key], ...next };
+      // Keep the legacy global quick-buy in sync with the 'new' column so
+      // other pages (Trade, Chart) still see the most-recent value.
+      if (key === "new" && next.quickBuy != null) {
+        setQuickBuySol(next.quickBuy);
+      }
+      return { ...s, [key]: merged };
+    });
   }
 
-  async function handleQuickBuy(coin: TrenchCoin) {
+  async function handleQuickBuy(coin: TrenchCoin, sol: number) {
     setError(null);
     if (!primaryWallet) {
       setError("set a primary wallet in the header first");
@@ -93,10 +124,10 @@ export function Trenches() {
       await ipc.manualSnipe({
         mint: coin.mint,
         wallet_pubkeys: [primaryWallet],
-        strategy: { kind: "uniform", sol: quickBuy },
+        strategy: { kind: "uniform", sol },
       });
       const sym = coin.symbol ?? coin.mint.slice(0, 6);
-      setFeedback(`bought ${quickBuy} SOL of ${sym}`);
+      setFeedback(`bought ${sol} SOL of ${sym}`);
       window.setTimeout(() => setFeedback(null), 2500);
     } catch (e) {
       setError(String(e));
@@ -166,11 +197,11 @@ export function Trenches() {
 
   const filtered = useMemo(
     () => ({
-      new: applyFilters(buckets.new, filters),
-      almost: applyFilters(buckets.almost, filters),
-      migrated: applyFilters(buckets.migrated, filters),
+      new: applyFilters(buckets.new, columnState.new.filters),
+      almost: applyFilters(buckets.almost, columnState.almost.filters),
+      migrated: applyFilters(buckets.migrated, columnState.migrated.filters),
     }),
-    [buckets, filters],
+    [buckets, columnState],
   );
 
   return (
@@ -195,13 +226,6 @@ export function Trenches() {
           </div>
         </div>
 
-        <FilterBar
-          filters={filters}
-          onChange={setFilters}
-          quickBuy={quickBuy}
-          onQuickBuy={commitQuickBuy}
-        />
-
         {error && (
           <div className="mb-2 border-l-2 border-danger bg-danger/5 px-3 py-2 font-mono text-2xs text-danger">
             {error}
@@ -215,6 +239,7 @@ export function Trenches() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 flex-1 min-h-0">
           <Column
+            colKey="new"
             label="new"
             sublabel="freshly minted"
             accent="accent"
@@ -223,10 +248,12 @@ export function Trenches() {
             highlightUntil={highlightUntil}
             tick={tick}
             onQuickBuy={handleQuickBuy}
-            quickBuy={quickBuy}
+            state={columnState.new}
+            onState={(next) => setColumn("new", next)}
             primaryReady={!!primaryWallet}
           />
           <Column
+            colKey="almost"
             label="almost"
             sublabel="curve filling — close to migration"
             accent="warn"
@@ -235,10 +262,12 @@ export function Trenches() {
             highlightUntil={highlightUntil}
             tick={tick}
             onQuickBuy={handleQuickBuy}
-            quickBuy={quickBuy}
+            state={columnState.almost}
+            onState={(next) => setColumn("almost", next)}
             primaryReady={!!primaryWallet}
           />
           <Column
+            colKey="migrated"
             label="migrated"
             sublabel="graduated to raydium"
             accent="muted"
@@ -247,7 +276,8 @@ export function Trenches() {
             highlightUntil={highlightUntil}
             tick={tick}
             onQuickBuy={handleQuickBuy}
-            quickBuy={quickBuy}
+            state={columnState.migrated}
+            onState={(next) => setColumn("migrated", next)}
             primaryReady={!!primaryWallet}
           />
         </div>
@@ -257,6 +287,7 @@ export function Trenches() {
 }
 
 function Column({
+  colKey,
   label,
   sublabel,
   accent,
@@ -265,9 +296,11 @@ function Column({
   highlightUntil,
   tick,
   onQuickBuy,
-  quickBuy,
+  state,
+  onState,
   primaryReady,
 }: {
+  colKey: ColumnKey;
   label: string;
   sublabel: string;
   accent: "accent" | "warn" | "muted";
@@ -276,10 +309,13 @@ function Column({
   highlightUntil: Map<string, number>;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   tick: number; // forces re-render so age cells stay live
-  onQuickBuy: (c: TrenchCoin) => void;
-  quickBuy: number;
+  onQuickBuy: (c: TrenchCoin, sol: number) => void;
+  state: ColumnState;
+  onState: (next: Partial<ColumnState>) => void;
   primaryReady: boolean;
 }) {
+  // colKey reserved for future per-column persistence (saved filter sets).
+  void colKey;
   const accentClass =
     accent === "accent"
       ? "text-accent"
@@ -289,18 +325,29 @@ function Column({
 
   return (
     <div className="border border-border bg-bg-subtle/30 flex flex-col min-h-0">
-      <div className="flex items-baseline justify-between border-b border-border px-3 py-2 shrink-0">
-        <div className="flex items-baseline gap-2">
-          <span className={cn("font-mono text-2xs", accentClass)}>{label}</span>
-          <span className="font-mono text-2xs text-fg-subtle">
-            [{coins.length}
-            {coins.length !== totalCount && (
-              <span className="text-fg-subtle/60">/{totalCount}</span>
-            )}
-            ]
+      <div className="border-b border-border px-3 py-2 shrink-0 space-y-1.5">
+        <div className="flex items-baseline justify-between">
+          <div className="flex items-baseline gap-2">
+            <span className={cn("font-mono text-2xs", accentClass)}>
+              {label}
+            </span>
+            <span className="font-mono text-2xs text-fg-subtle">
+              [{coins.length}
+              {coins.length !== totalCount && (
+                <span className="text-fg-subtle/60">/{totalCount}</span>
+              )}
+              ]
+            </span>
+          </div>
+          <span className="font-mono text-2xs text-fg-subtle/70 truncate ml-2">
+            {sublabel}
           </span>
         </div>
-        <span className="font-mono text-2xs text-fg-subtle/70">{sublabel}</span>
+        <ColumnControls
+          state={state}
+          onState={onState}
+          accent={accent}
+        />
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-border/40">
         {coins.length === 0 ? (
@@ -315,12 +362,88 @@ function Column({
               highlight={highlightUntil.has(c.mint)}
               accent={accent}
               onQuickBuy={onQuickBuy}
-              quickBuy={quickBuy}
+              quickBuy={state.quickBuy}
               primaryReady={primaryReady}
             />
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+function ColumnControls({
+  state,
+  onState,
+  accent,
+}: {
+  state: ColumnState;
+  onState: (next: Partial<ColumnState>) => void;
+  accent: "accent" | "warn" | "muted";
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const count = activeFilterCount(state.filters);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const accentClass =
+    accent === "accent"
+      ? "border-accent/40 text-accent bg-accent/5"
+      : accent === "warn"
+        ? "border-warn/40 text-warn bg-warn/5"
+        : "border-border text-fg-muted bg-bg-subtle";
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div ref={ref} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((s) => !s)}
+          className={cn(
+            "font-mono text-2xs px-2 py-0.5 border transition-colors",
+            count > 0 || open
+              ? accentClass
+              : "border-border text-fg-subtle hover:border-border-strong hover:text-fg-muted",
+          )}
+        >
+          filters{count > 0 && <span className="ml-1">[{count}]</span>}
+        </button>
+        {open && (
+          <FilterPanel
+            filters={state.filters}
+            onChange={(f) => onState({ filters: f })}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </div>
+      <span className="flex items-center gap-1 font-mono text-2xs text-fg-subtle">
+        <span>buy</span>
+        <input
+          type="number"
+          min="0.0001"
+          step="0.01"
+          defaultValue={state.quickBuy}
+          onBlur={(e) => {
+            const n = parseFloat(e.target.value);
+            if (Number.isFinite(n) && n > 0) onState({ quickBuy: n });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          className="w-14 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent"
+        />
+        <span>SOL</span>
+      </span>
     </div>
   );
 }
@@ -336,7 +459,7 @@ function CoinRow({
   coin: TrenchCoin;
   highlight: boolean;
   accent: "accent" | "warn" | "muted";
-  onQuickBuy: (c: TrenchCoin) => void;
+  onQuickBuy: (c: TrenchCoin, sol: number) => void;
   quickBuy: number;
   primaryReady: boolean;
 }) {
@@ -409,7 +532,7 @@ function CoinRow({
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          onQuickBuy(coin);
+          onQuickBuy(coin, quickBuy);
         }}
         disabled={!primaryReady}
         title={
@@ -445,163 +568,109 @@ function LiveBadge() {
   );
 }
 
-function FilterBar({
+function FilterPanel({
   filters,
   onChange,
-  quickBuy,
-  onQuickBuy,
+  onClose,
 }: {
   filters: Filters;
   onChange: (next: Filters) => void;
-  quickBuy: number;
-  onQuickBuy: (v: string) => void;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const count = activeFilterCount(filters);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDoc(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
   return (
-    <div className="flex items-center gap-3 flex-wrap mb-3">
-      {/* Filters dropdown trigger */}
-      <div ref={ref} className="relative">
-        <button
-          type="button"
-          onClick={() => setOpen((s) => !s)}
-          className={cn(
-            "font-mono text-2xs px-2.5 py-1 border transition-colors",
-            count > 0 || open
-              ? "border-accent text-accent bg-accent/5"
-              : "border-border text-fg-muted hover:border-border-strong hover:text-fg",
-          )}
-        >
-          filters{count > 0 && <span className="ml-1">[{count}]</span>}
-        </button>
+    <div className="absolute left-0 top-full mt-1 z-30 w-[420px] border border-border bg-bg shadow-xl p-3 space-y-3">
+      <FilterGroup label="age (minutes)">
+        <RangeFilter
+          min={filters.ageMin}
+          max={filters.ageMax}
+          onMin={(v) => onChange({ ...filters, ageMin: v })}
+          onMax={(v) => onChange({ ...filters, ageMax: v })}
+        />
+      </FilterGroup>
+      <FilterGroup label="market cap (USD)">
+        <RangeFilter
+          min={filters.mcMin}
+          max={filters.mcMax}
+          onMin={(v) => onChange({ ...filters, mcMin: v })}
+          onMax={(v) => onChange({ ...filters, mcMax: v })}
+        />
+      </FilterGroup>
+      <FilterGroup label="24h volume (USD)">
+        <RangeFilter
+          min={filters.volumeMin}
+          max={filters.volumeMax}
+          onMin={(v) => onChange({ ...filters, volumeMin: v })}
+          onMax={(v) => onChange({ ...filters, volumeMax: v })}
+        />
+      </FilterGroup>
+      <FilterGroup label="bonding curve (%)">
+        <RangeFilter
+          min={filters.curveMin}
+          max={filters.curveMax}
+          onMin={(v) => onChange({ ...filters, curveMin: v })}
+          onMax={(v) => onChange({ ...filters, curveMax: v })}
+        />
+      </FilterGroup>
+      <FilterGroup label="engagement">
+        <div className="flex items-center gap-2 font-mono text-2xs text-fg-subtle">
+          <span>min replies</span>
+          <input
+            value={filters.repliesMin}
+            onChange={(e) =>
+              onChange({ ...filters, repliesMin: e.target.value })
+            }
+            placeholder="0"
+            className="w-16 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
+          />
+        </div>
+      </FilterGroup>
+      <FilterGroup label="signal">
+        <div className="flex items-center gap-3 flex-wrap">
+          <ToggleFilter
+            label="live only"
+            checked={filters.liveOnly}
+            onChange={(v) => onChange({ ...filters, liveOnly: v })}
+            accent="danger"
+          />
+          <ToggleFilter
+            label="has twitter"
+            checked={filters.hasTwitter}
+            onChange={(v) => onChange({ ...filters, hasTwitter: v })}
+          />
+          <ToggleFilter
+            label="has telegram"
+            checked={filters.hasTelegram}
+            onChange={(v) => onChange({ ...filters, hasTelegram: v })}
+          />
+          <ToggleFilter
+            label="has website"
+            checked={filters.hasWebsite}
+            onChange={(v) => onChange({ ...filters, hasWebsite: v })}
+          />
+        </div>
+      </FilterGroup>
 
-        {open && (
-          <div className="absolute left-0 top-full mt-1 z-30 w-[460px] border border-border bg-bg shadow-xl p-3 space-y-3">
-            <FilterGroup label="age (minutes)">
-              <RangeFilter
-                min={filters.ageMin}
-                max={filters.ageMax}
-                onMin={(v) => onChange({ ...filters, ageMin: v })}
-                onMax={(v) => onChange({ ...filters, ageMax: v })}
-              />
-            </FilterGroup>
-            <FilterGroup label="market cap (USD)">
-              <RangeFilter
-                min={filters.mcMin}
-                max={filters.mcMax}
-                onMin={(v) => onChange({ ...filters, mcMin: v })}
-                onMax={(v) => onChange({ ...filters, mcMax: v })}
-              />
-            </FilterGroup>
-            <FilterGroup label="bonding curve (%)">
-              <RangeFilter
-                min={filters.curveMin}
-                max={filters.curveMax}
-                onMin={(v) => onChange({ ...filters, curveMin: v })}
-                onMax={(v) => onChange({ ...filters, curveMax: v })}
-              />
-            </FilterGroup>
-            <FilterGroup label="engagement">
-              <div className="flex items-center gap-2 font-mono text-2xs text-fg-subtle">
-                <span>min replies</span>
-                <input
-                  value={filters.repliesMin}
-                  onChange={(e) =>
-                    onChange({ ...filters, repliesMin: e.target.value })
-                  }
-                  placeholder="0"
-                  className="w-16 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
-                />
-              </div>
-            </FilterGroup>
-            <FilterGroup label="signal">
-              <div className="flex items-center gap-3 flex-wrap">
-                <ToggleFilter
-                  label="live only"
-                  checked={filters.liveOnly}
-                  onChange={(v) => onChange({ ...filters, liveOnly: v })}
-                  accent="danger"
-                />
-                <ToggleFilter
-                  label="has twitter"
-                  checked={filters.hasTwitter}
-                  onChange={(v) => onChange({ ...filters, hasTwitter: v })}
-                />
-                <ToggleFilter
-                  label="has telegram"
-                  checked={filters.hasTelegram}
-                  onChange={(v) => onChange({ ...filters, hasTelegram: v })}
-                />
-                <ToggleFilter
-                  label="has website"
-                  checked={filters.hasWebsite}
-                  onChange={(v) => onChange({ ...filters, hasWebsite: v })}
-                />
-              </div>
-            </FilterGroup>
-
-            {/* Planned for v0.1.32+: bundle %, holders, dev hold %, KOL count */}
-            <div className="border-t border-border pt-2 font-mono text-[10px] text-fg-subtle/60 leading-relaxed">
-              coming next: bundle %, holders, dev hold %, kol/smart-money
-              count, top-10 concentration. these need on-chain holder
-              indexing — landing in v0.1.32.
-            </div>
-
-            <div className="flex items-center justify-between border-t border-border pt-2">
-              <button
-                type="button"
-                onClick={() => onChange(DEFAULT_FILTERS)}
-                className="font-mono text-2xs text-fg-subtle hover:text-danger"
-              >
-                reset
-              </button>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="font-mono text-2xs text-accent hover:underline"
-              >
-                done
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="border-t border-border pt-2 font-mono text-[10px] text-fg-subtle/60 leading-relaxed">
+        coming next: bundle %, holders, dev hold %, kol/smart-money count,
+        top-10 concentration. these need on-chain holder indexing.
       </div>
 
-      {/* Always-visible compact summary of active filters */}
-      {count > 0 && (
-        <span className="font-mono text-2xs text-fg-subtle">
-          {filterSummary(filters)}
-        </span>
-      )}
-
-      <span className="ml-auto flex items-center gap-1.5 font-mono text-2xs text-fg-subtle">
-        <span>quick-buy</span>
-        <input
-          type="number"
-          min="0.0001"
-          step="0.01"
-          defaultValue={quickBuy}
-          onBlur={(e) => onQuickBuy(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-          className="w-16 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent"
-        />
-        <span>SOL</span>
-      </span>
+      <div className="flex items-center justify-between border-t border-border pt-2">
+        <button
+          type="button"
+          onClick={() => onChange(DEFAULT_FILTERS)}
+          className="font-mono text-2xs text-fg-subtle hover:text-danger"
+        >
+          reset
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="font-mono text-2xs text-accent hover:underline"
+        >
+          done
+        </button>
+      </div>
     </div>
   );
 }
@@ -701,6 +770,8 @@ function applyFilters(coins: TrenchCoin[], f: Filters): TrenchCoin[] {
   const ageMax = parseFloat(f.ageMax);
   const mcMin = parseFloat(f.mcMin);
   const mcMax = parseFloat(f.mcMax);
+  const volMin = parseFloat(f.volumeMin);
+  const volMax = parseFloat(f.volumeMax);
   const curveMin = parseFloat(f.curveMin);
   const curveMax = parseFloat(f.curveMax);
   const repliesMin = parseFloat(f.repliesMin);
@@ -714,6 +785,10 @@ function applyFilters(coins: TrenchCoin[], f: Filters): TrenchCoin[] {
       return false;
     if (Number.isFinite(mcMin) && (c.usd_market_cap ?? 0) < mcMin) return false;
     if (Number.isFinite(mcMax) && (c.usd_market_cap ?? Infinity) > mcMax)
+      return false;
+    if (Number.isFinite(volMin) && (c.volume_usd_24h ?? 0) < volMin)
+      return false;
+    if (Number.isFinite(volMax) && (c.volume_usd_24h ?? Infinity) > volMax)
       return false;
     if (
       Number.isFinite(curveMin) &&

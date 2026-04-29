@@ -664,6 +664,9 @@ pub struct TrenchCoin {
     pub created_at_ms: Option<i64>,
     pub age_minutes: Option<i64>,
     pub usd_market_cap: Option<f64>,
+    /// 24h trading volume in USD — populated by DexScreener tokens enrichment
+    /// for tokens that have a tracked pair. Pump.fun's API doesn't expose this.
+    pub volume_usd_24h: Option<f64>,
     pub virtual_sol_reserves: Option<f64>,
     pub virtual_token_reserves: Option<f64>,
     pub bonding_curve_progress_pct: Option<f64>,
@@ -713,10 +716,94 @@ pub async fn fetch_pumpfun_buckets() -> TrenchBuckets {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    TrenchBuckets {
+    let mut buckets = TrenchBuckets {
         new: n.unwrap_or_default(),
         almost,
         migrated: m.unwrap_or_default(),
+    };
+
+    // Enrich volume_usd_24h via DexScreener tokens batch for the migrated
+    // and almost-migrated buckets — those are the buckets where DexScreener
+    // actually has a tracked pair. New (still on bonding curve) tokens
+    // mostly have no DEX pair, so we skip them to save the API call.
+    enrich_trench_volume(&mut buckets.migrated).await;
+    enrich_trench_volume(&mut buckets.almost).await;
+
+    buckets
+}
+
+/// Pulls 24h USD volume + image fallback for trench coins from DexScreener's
+/// tokens batch endpoint. Up to 30 mints per call. Best-effort; failures are
+/// silently dropped — the column still renders without volume data.
+async fn enrich_trench_volume(coins: &mut [TrenchCoin]) {
+    let needs: Vec<String> = coins
+        .iter()
+        .filter(|c| c.volume_usd_24h.is_none())
+        .map(|c| c.mint.clone())
+        .take(60)
+        .collect();
+    if needs.is_empty() {
+        return;
+    }
+    let client = match reqwest::Client::builder()
+        .user_agent("snipebundle/0.1")
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let mut by_mint: HashMap<String, (Option<f64>, Option<String>)> =
+        HashMap::new();
+    for chunk in needs.chunks(30) {
+        let url = format!("{}{}", DEXSCREENER_TOKENS_BATCH, chunk.join(","));
+        let Ok(resp) = client.get(&url).send().await else {
+            continue;
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let Some(pairs) = json.get("pairs").and_then(|x| x.as_array()) else {
+            continue;
+        };
+        for p in pairs {
+            let Some(mint) = p
+                .get("baseToken")
+                .and_then(|b| b.get("address"))
+                .and_then(|x| x.as_str())
+            else {
+                continue;
+            };
+            let entry = by_mint.entry(mint.to_string()).or_insert((None, None));
+            // Pick the highest 24h volume across the token's pairs (DEX
+            // aggregators sum-of-pairs is the standard "token volume").
+            let v = p
+                .get("volume")
+                .and_then(|c| c.get("h24"))
+                .and_then(|x| x.as_f64());
+            if let Some(v) = v {
+                if entry.0.unwrap_or(0.0) < v {
+                    entry.0 = Some(v);
+                }
+            }
+            if entry.1.is_none() {
+                entry.1 = p
+                    .get("info")
+                    .and_then(|i| i.get("imageUrl"))
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+            }
+        }
+    }
+    for c in coins {
+        if let Some((vol, img)) = by_mint.get(&c.mint) {
+            if c.volume_usd_24h.is_none() {
+                c.volume_usd_24h = *vol;
+            }
+            if c.image_url.is_none() {
+                c.image_url = img.clone();
+            }
+        }
     }
 }
 
@@ -786,6 +873,7 @@ async fn fetch_pumpfun_endpoint(url: &str) -> Result<Vec<TrenchCoin>> {
                 .get("usd_market_cap")
                 .and_then(|x| x.as_f64())
                 .filter(|v| *v > 0.0),
+            volume_usd_24h: None,
             virtual_sol_reserves: virtual_sol,
             virtual_token_reserves: virtual_tok,
             bonding_curve_progress_pct,
@@ -959,6 +1047,7 @@ async fn fetch_pumpfun_coin(client: &reqwest::Client, mint: &str) -> Result<Tren
             .get("usd_market_cap")
             .and_then(|x| x.as_f64())
             .filter(|v| *v > 0.0),
+        volume_usd_24h: None,
         virtual_sol_reserves: virtual_sol,
         virtual_token_reserves: c
             .get("virtual_token_reserves")
