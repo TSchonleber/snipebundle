@@ -782,6 +782,42 @@ pub async fn fan_out_from_master(
         .map_err(err)
 }
 
+#[derive(Deserialize)]
+pub struct FanOutPerWalletArgs {
+    pub recipients: Vec<String>,
+    pub amounts_sol: Vec<f64>,
+}
+
+#[tauri::command]
+pub async fn fan_out_from_master_per_wallet(
+    args: FanOutPerWalletArgs,
+    state: State<'_, AppState>,
+) -> Result<FanOutResult> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    let master = ks
+        .master
+        .ok_or("no master wallet in keystore")?;
+    funding::fan_out_from_master_per_wallet(
+        &master,
+        &args.recipients,
+        &args.amounts_sol,
+        &cfg.network,
+    )
+    .await
+    .map_err(err)
+}
+
 #[tauri::command]
 pub async fn get_balances(
     pubkeys: Vec<String>,

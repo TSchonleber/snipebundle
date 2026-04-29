@@ -254,6 +254,16 @@ export const ipc = {
     }>("fan_out_from_master", {
       args: { recipients, sol_per_wallet: solPerWallet },
     }),
+  fanOutFromMasterPerWallet: (recipients: string[], amountsSol: number[]) =>
+    invoke<{
+      signature: string;
+      master_pubkey: string;
+      recipients: string[];
+      sol_per_wallet: number;
+      total_sol: number;
+    }>("fan_out_from_master_per_wallet", {
+      args: { recipients, amounts_sol: amountsSol },
+    }),
   addSniperWallet: (passphrase: string, label?: string) =>
     invoke<WalletWithSecret>("add_sniper_wallet", {
       args: { passphrase, label },

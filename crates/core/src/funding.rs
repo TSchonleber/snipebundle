@@ -50,25 +50,49 @@ pub async fn fan_out_from_master(
     sol_per_wallet: f64,
     net: &NetworkConfig,
 ) -> Result<FanOutResult> {
+    let amounts = vec![sol_per_wallet; recipients.len()];
+    fan_out_from_master_per_wallet(master, recipients, &amounts, net).await
+}
+
+/// Same as `fan_out_from_master` but each recipient receives its own
+/// SOL amount. Lets the UI offer per-wallet input or randomized
+/// distribution without needing multiple round-trips. Still a single
+/// on-chain tx — one transfer instruction per recipient.
+pub async fn fan_out_from_master_per_wallet(
+    master: &StoredKeypair,
+    recipients: &[String],
+    amounts_sol: &[f64],
+    net: &NetworkConfig,
+) -> Result<FanOutResult> {
     anyhow::ensure!(!recipients.is_empty(), "no recipients");
-    anyhow::ensure!(sol_per_wallet > 0.0, "sol_per_wallet must be positive");
+    anyhow::ensure!(
+        recipients.len() == amounts_sol.len(),
+        "recipients.len() {} != amounts.len() {}",
+        recipients.len(),
+        amounts_sol.len()
+    );
     anyhow::ensure!(
         recipients.len() <= 20,
         "fan-out capped at 20 recipients per tx for safety"
     );
-
-    let lamports_each = (sol_per_wallet * LAMPORTS_PER_SOL as f64).round() as u64;
-    anyhow::ensure!(lamports_each > 0, "amount rounds to zero lamports");
+    for (r, a) in recipients.iter().zip(amounts_sol) {
+        anyhow::ensure!(*a > 0.0, "amount for {r} must be positive (got {a})");
+    }
 
     let master_kp = wallet::from_stored(master)?;
     let master_pub = master_kp.pubkey();
 
     let mut instructions = Vec::with_capacity(recipients.len());
-    for r in recipients {
+    for (r, amt) in recipients.iter().zip(amounts_sol) {
         let to = Pubkey::from_str(r).map_err(|e| anyhow!("invalid recipient {r}: {e}"))?;
         anyhow::ensure!(to != master_pub, "recipient {r} is the master wallet");
+        let lamports = (*amt * LAMPORTS_PER_SOL as f64).round() as u64;
+        anyhow::ensure!(
+            lamports > 0,
+            "amount {amt} for {r} rounds to zero lamports"
+        );
         #[allow(deprecated)]
-        instructions.push(system_instruction::transfer(&master_pub, &to, lamports_each));
+        instructions.push(system_instruction::transfer(&master_pub, &to, lamports));
     }
 
     let client = RpcClient::new_with_commitment(net.rpc_url.clone(), CommitmentConfig::confirmed());
@@ -90,13 +114,18 @@ pub async fn fan_out_from_master(
         .await
         .context("send and confirm fan-out tx")?;
 
-    let total = sol_per_wallet * recipients.len() as f64;
+    let total = amounts_sol.iter().sum::<f64>();
+    let avg = if recipients.is_empty() {
+        0.0
+    } else {
+        total / recipients.len() as f64
+    };
     info!(
         sig = %signature,
         master = %master_pub,
         recipients = recipients.len(),
-        sol_per_wallet,
         total_sol = total,
+        avg_sol_per_wallet = avg,
         "fan-out submitted"
     );
 
@@ -104,7 +133,7 @@ pub async fn fan_out_from_master(
         signature: signature.to_string(),
         master_pubkey: master_pub.to_string(),
         recipients: recipients.to_vec(),
-        sol_per_wallet,
+        sol_per_wallet: avg,
         total_sol: total,
     })
 }
