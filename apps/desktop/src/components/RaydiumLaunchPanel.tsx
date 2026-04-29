@@ -101,10 +101,7 @@ export function RaydiumLaunchPanel({ devWallets, snipers }: Props) {
     if (!devPubkey) return "Pick a dev wallet.";
     if (!name.trim() || !symbol.trim()) return "Name and symbol required.";
     if (!metadataUri.trim() && !imagePath) {
-      return "Provide a metadata URI OR pick an image (we'll upload metadata for you in v0.1.58).";
-    }
-    if (!metadataUri.trim()) {
-      return "v0.1.57 requires a pre-uploaded metadata URI. v0.1.58+ will handle upload from the picked image.";
+      return "Provide a metadata URI OR pick an image — we'll upload it for you.";
     }
     const supply = parseFloat(tokenSupply);
     const decimals = parseInt(tokenDecimals, 10);
@@ -143,6 +140,7 @@ export function RaydiumLaunchPanel({ devWallets, snipers }: Props) {
         website: website.trim() || null,
       },
       metadata_uri: metadataUri.trim(),
+      image_path: imagePath,
       token_supply: supply,
       token_decimals: decimals,
       initial_lp_token_amount: lpT,
@@ -171,17 +169,19 @@ export function RaydiumLaunchPanel({ devWallets, snipers }: Props) {
 
   return (
     <div className="space-y-5">
-      {/* Spec banner — v0.1.57 ships UI only, on-chain in v0.1.58+ */}
-      <div className="rounded-lg border border-warn/40 bg-warn/10 p-3 text-sm">
-        <div className="font-semibold text-warn">
-          v0.1.57 — UI surface ships, on-chain implementation lands in
-          v0.1.58+ (devnet testing required first).
+      {/* v0.1.58 — token + metadata ships; pool init via Raydium UI */}
+      <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 text-sm">
+        <div className="font-semibold text-accent">
+          v0.1.58 — token mint + Metaplex metadata ships on-chain.
         </div>
         <div className="mt-1 font-mono text-2xs text-fg-muted">
-          Submitting will currently return a clear "not yet implemented"
-          error. The data model + form are wired so we can iterate the
-          UX while the Rust ix-building work lands separately. Full plan
-          in RAYDIUM_LAUNCH_SPEC.md.
+          Submitting creates the SPL token, mints supply to the dev
+          wallet, and attaches immutable metadata in one tx. After
+          success we deep-link you into Raydium's pool creator with the
+          mint pre-filled — finishing pool init via Raydium's tested
+          SDK is safer than hand-rolling CPMM ixs blind. Bundled
+          first-buy with co-buyer protection is v0.1.59 once we have
+          devnet test infra. Spec: RAYDIUM_LAUNCH_SPEC.md.
         </div>
       </div>
 
@@ -429,16 +429,65 @@ export function RaydiumLaunchPanel({ devWallets, snipers }: Props) {
       )}
 
       {result && (
-        <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 text-sm">
-          <div className="font-semibold text-accent">✓ Launch landed</div>
-          <div className="mt-1 font-mono text-2xs space-y-0.5 text-fg-subtle">
-            <div>mint: {result.mint}</div>
-            <div>pool: {result.pool_id}</div>
-            <div>bundle: {result.bundle_id}</div>
-            {result.lp_burn_signature && (
-              <div>lp burn: {result.lp_burn_signature}</div>
-            )}
+        <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 text-sm space-y-3">
+          <div className="font-semibold text-accent">
+            ✓ Token minted with metadata
           </div>
+          <div className="font-mono text-2xs space-y-0.5 text-fg-subtle">
+            <div>
+              mint:{" "}
+              <a
+                href={`https://solscan.io/token/${result.mint}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent hover:underline break-all"
+              >
+                {result.mint}
+              </a>
+            </div>
+            <div>
+              tx:{" "}
+              <a
+                href={`https://solscan.io/tx/${result.bundle_id}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent hover:underline break-all"
+              >
+                {result.bundle_id}
+              </a>
+            </div>
+          </div>
+
+          <div className="rounded border border-warn/40 bg-warn/10 p-3">
+            <div className="font-semibold text-warn">
+              Step 2 — create the Raydium pool
+            </div>
+            <p className="mt-1 font-mono text-2xs text-fg-muted">
+              Open Raydium's pool creator (CPMM, no OpenBook needed) with
+              this mint pre-filled. Provide your initial liquidity, do
+              your first buy from there. Bundled first-buy with co-buyer
+              protection lands in v0.1.59 after devnet testing.
+            </p>
+            <a
+              href={`https://raydium.io/liquidity/create-pool/?baseMint=${result.mint}&quoteMint=So11111111111111111111111111111111111111112`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block rounded border border-warn/60 bg-warn/10 px-3 py-1 font-mono text-2xs text-warn hover:bg-warn/20"
+            >
+              open Raydium pool creator ↗
+            </a>
+          </div>
+
+          {result.pool_id && (
+            <div className="font-mono text-2xs text-fg-subtle">
+              pool: {result.pool_id}
+            </div>
+          )}
+          {result.lp_burn_signature && (
+            <div className="font-mono text-2xs text-fg-subtle">
+              lp burn: {result.lp_burn_signature}
+            </div>
+          )}
         </div>
       )}
 

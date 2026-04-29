@@ -212,7 +212,10 @@ export interface RaydiumCoBuyer {
 export interface RaydiumLaunchArgs {
   dev_pubkey: string;
   metadata: LaunchArgs["metadata"];
+  /** Optional. If empty AND `image_path` is set, backend uploads via
+   *  pump.fun IPFS and uses the returned URI. */
   metadata_uri: string;
+  image_path: string | null;
   token_supply: number;
   token_decimals: number;
   initial_lp_token_amount: number;
