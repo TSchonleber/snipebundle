@@ -854,7 +854,10 @@ async fn fetch_pumpfun_endpoint(url: &str) -> Result<Vec<TrenchCoin>> {
         // pump.fun graduates a coin once ~85 SOL has hit the bonding curve.
         // Translate virtual reserves into a 0-100% completion estimate.
         // Fallback to the explicit `complete` flag for migrated coins.
-        let bonding_curve_progress_pct = virtual_sol.map(|sol| {
+        // NOTE: virtual_sol_reserves comes from the API in lamports
+        // (1 SOL = 1e9 lamports), not SOL — divide before doing math.
+        let bonding_curve_progress_pct = virtual_sol.map(|sol_lamports| {
+            let sol = sol_lamports / 1_000_000_000.0;
             // virtual_sol_reserves starts ~30 SOL and tops out ~115 SOL.
             // 30..115 → 0..100, clamped.
             let pct = ((sol - 30.0) / 85.0) * 100.0;
@@ -1030,7 +1033,10 @@ async fn fetch_pumpfun_coin(client: &reqwest::Client, mint: &str) -> Result<Tren
     let created_at_ms = c.get("created_timestamp").and_then(|x| x.as_i64());
     let age_minutes = created_at_ms.map(|t| ((now_ms - t) / 60_000).max(0));
     let virtual_sol = c.get("virtual_sol_reserves").and_then(|x| x.as_f64());
-    let bonding_curve_progress_pct = virtual_sol.map(|sol| {
+    // virtual_sol_reserves is in lamports — convert before applying the
+    // 30..115 SOL → 0..100% mapping.
+    let bonding_curve_progress_pct = virtual_sol.map(|sol_lamports| {
+        let sol = sol_lamports / 1_000_000_000.0;
         let pct = ((sol - 30.0) / 85.0) * 100.0;
         pct.clamp(0.0, 100.0)
     });
