@@ -1,21 +1,10 @@
-import { useState } from "react";
 import { cn } from "@snipebundle/ui";
 
-type Source = "dexscreener" | "pumpfun";
-
-const SOURCES: { id: Source; label: string; build: (mint: string) => string }[] = [
-  {
-    id: "dexscreener",
-    label: "dexscreener",
-    build: (mint) =>
-      `https://dexscreener.com/solana/${mint}?embed=1&theme=dark&info=0&trades=0`,
-  },
-  {
-    id: "pumpfun",
-    label: "pump.fun",
-    build: (mint) => `https://pump.fun/coin/${mint}`,
-  },
-];
+const dexscreenerEmbed = (mint: string) =>
+  `https://dexscreener.com/solana/${mint}?embed=1&theme=dark&info=0&trades=0`;
+const dexscreenerExternal = (mint: string) =>
+  `https://dexscreener.com/solana/${mint}`;
+const pumpfunExternal = (mint: string) => `https://pump.fun/coin/${mint}`;
 
 interface Props {
   mint: string;
@@ -39,10 +28,8 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
   const fill = !height;
   const resolvedHeight = height ?? 360;
   const editable = !!onMintChange;
-  const [source, setSource] = useState<Source>("dexscreener");
   const trimmed = mint.trim();
   const valid = isValidMint(trimmed);
-  const active = SOURCES.find((s) => s.id === source) ?? SOURCES[0];
 
   return (
     <div
@@ -73,32 +60,30 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-0.5">
-            {SOURCES.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setSource(s.id)}
-                className={cn(
-                  "font-mono text-2xs px-2 py-0.5 transition-colors",
-                  s.id === source
-                    ? "text-accent"
-                    : "text-fg-subtle hover:text-fg-muted",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          {/* Open in external browser. pump.fun blocks iframe embedding
+              via X-Frame-Options:DENY, so we link out instead of trying
+              to render it inside our app. DexScreener supports embedding
+              and is what powers the live iframe below. */}
           {valid && (
             <a
-              href={active.build(trimmed)}
+              href={pumpfunExternal(trimmed)}
               target="_blank"
               rel="noreferrer"
               className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
-              title="open in browser"
+              title="open on pump.fun (external browser)"
             >
-              ↗
+              pump.fun ↗
+            </a>
+          )}
+          {valid && (
+            <a
+              href={dexscreenerExternal(trimmed)}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
+              title="open on dexscreener (external browser)"
+            >
+              dexscreener ↗
             </a>
           )}
           {onClose && (
@@ -119,14 +104,14 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
       >
         {valid ? (
           <iframe
-            // re-mount on mint or source change so the iframe doesn't carry
-            // stale state (and so going from invalid→valid actually loads).
-            key={`${source}:${trimmed}`}
-            src={active.build(trimmed)}
+            // Re-mount on mint change so the iframe doesn't carry stale
+            // state (and so going from invalid→valid actually loads).
+            key={trimmed}
+            src={dexscreenerEmbed(trimmed)}
             title={`chart for ${trimmed}`}
             className="absolute inset-0 h-full w-full bg-bg"
-            // Tauri webview won't sandbox these aggressively; allow scripts
-            // so the embed is interactive.
+            // Tauri webview won't sandbox these aggressively; allow
+            // scripts so the embed is interactive.
             sandbox="allow-scripts allow-same-origin allow-popups"
             loading="lazy"
           />
