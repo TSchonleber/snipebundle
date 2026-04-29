@@ -1,4 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CandlestickSeries,
+  HistogramSeries,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from "lightweight-charts";
 import { cn } from "@snipebundle/ui";
 import {
   ipc,
@@ -6,49 +14,66 @@ import {
   type PumpTrade,
   type TrenchCoin,
 } from "../lib/ipc";
-
-const PUMPPORTAL_WS = "wss://pumpportal.fun/api/data";
-const MAX_TRADES = 600; // ring-buffer cap so the SVG path stays cheap
+import {
+  onStreamEvent,
+  subscribeTokenTrade,
+  type TokenTradeEvent,
+} from "../lib/pumpportal-stream";
 
 interface Props {
   mint: string;
   height: number;
 }
 
+type IntervalKey = "1s" | "5s" | "30s" | "1m" | "5m";
+const INTERVALS: { key: IntervalKey; label: string; seconds: number }[] = [
+  { key: "1s", label: "1s", seconds: 1 },
+  { key: "5s", label: "5s", seconds: 5 },
+  { key: "30s", label: "30s", seconds: 30 },
+  { key: "1m", label: "1m", seconds: 60 },
+  { key: "5m", label: "5m", seconds: 300 },
+];
+
+interface Candle {
+  time: number; // unix seconds, bucketed
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number; // SOL
+  buys: number;
+  sells: number;
+}
+
 /**
- * Live SVG line chart for pre-migration pump.fun coins.
+ * Real OHLC candlestick chart for pump.fun coins, regardless of how many
+ * trades have happened. Powered by TradingView's lightweight-charts (free,
+ * battle-tested) instead of hand-rolling SVG.
  *
- * Architecture:
- *   1. On mount, fetch a one-shot history seed via /trades/all (Rust IPC).
- *      Gives us the last ~200 trades so the chart paints something
- *      immediately.
- *   2. Open a WebSocket directly to PumpPortal (`wss://pumpportal.fun/api/data`)
- *      and send `{method: 'subscribeTokenTrade', keys: [mint]}`. This is the
- *      same channel the Rust engine uses for sniping — the protocol is
- *      documented in pump-portal/pumpdev's data-api page.
- *   3. Each WS trade message gets parsed into the same PumpTrade shape as
- *      the seed and appended to a ring buffer. Chart re-renders on the
- *      next React commit, no polling involved.
- *   4. On mint change or unmount, the WS is closed cleanly.
- *
- * Falls back to the seed-only view if the WS can't connect (e.g. user is
- * offline or PumpPortal is down).
+ *   - Seed: pump.fun /trades/all/<mint> (last ~200 trades) bucketed into
+ *     candles at the chosen interval.
+ *   - Live: PumpPortal WS subscribeTokenTrade — every trade updates the
+ *     current bucket (or rolls a new one if the timestamp crosses the
+ *     interval boundary).
+ *   - Volume histogram pinned to the bottom 25% of the chart.
  */
 export function PumpfunChart({ mint, height }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+
   const [coin, setCoin] = useState<TrenchCoin | null>(null);
   const [trades, setTrades] = useState<PumpTrade[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [intervalKey, setIntervalKey] = useState<IntervalKey>("5s");
   const [streaming, setStreaming] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(800);
+  const intervalSeconds =
+    INTERVALS.find((i) => i.key === intervalKey)?.seconds ?? 5;
 
-  // Seed history once per mint via REST. We don't poll this — the WS keeps
-  // the buffer fresh. Only re-fires when the user pastes a different mint.
+  // ---------------- Seed (REST) -----------------
   useEffect(() => {
+    if (!mint) return;
     let cancelled = false;
-    setError(null);
-    setTrades([]);
-    setCoin(null);
     ipc
       .getPumpfunChart(mint)
       .then((data: PumpChartData) => {
@@ -56,110 +81,158 @@ export function PumpfunChart({ mint, height }: Props) {
         setCoin(data.coin);
         setTrades(data.trades);
       })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
+      .catch(() => {
+        if (cancelled) return;
+        setTrades([]);
+        setCoin(null);
       });
     return () => {
       cancelled = true;
     };
   }, [mint]);
 
-  // Live trade stream via PumpPortal WS.
+  // ---------------- Live (WS) -----------------
   useEffect(() => {
     if (!mint) return;
-    let ws: WebSocket | null = null;
-    let cancelled = false;
-    let reconnectTimer: number | undefined;
-
-    function connect() {
-      if (cancelled) return;
-      try {
-        ws = new WebSocket(PUMPPORTAL_WS);
-      } catch (e) {
-        setError(String(e));
-        return;
-      }
-      ws.addEventListener("open", () => {
-        if (cancelled) return;
-        setStreaming(true);
-        ws?.send(
-          JSON.stringify({
-            method: "subscribeTokenTrade",
-            keys: [mint],
-          }),
-        );
-      });
-      ws.addEventListener("message", (ev) => {
-        if (cancelled) return;
-        const trade = parseTradeEvent(mint, ev.data);
-        if (trade) appendTrade(trade);
-      });
-      ws.addEventListener("close", () => {
-        if (cancelled) return;
-        setStreaming(false);
-        // Reconnect with a small backoff so a flaky network doesn't burn
-        // the chart permanently.
-        reconnectTimer = window.setTimeout(connect, 1500);
-      });
-      ws.addEventListener("error", () => {
-        // Let close handler drive the reconnect; just log it.
-        setStreaming(false);
-      });
-    }
-
-    function appendTrade(t: PumpTrade) {
+    const offSub = subscribeTokenTrade(mint);
+    const offEv = onStreamEvent((ev) => {
+      if (ev.kind !== "token_trade") return;
+      const tev = ev as TokenTradeEvent;
+      if (tev.mint !== mint) return;
+      setStreaming(true);
+      const price =
+        tev.v_sol_in_curve != null &&
+        tev.v_tokens_in_curve != null &&
+        tev.v_tokens_in_curve > 0
+          ? tev.v_sol_in_curve / tev.v_tokens_in_curve
+          : tev.token_amount > 0
+            ? tev.sol_amount / tev.token_amount
+            : 0;
+      const trade: PumpTrade = {
+        timestamp_ms: tev.received_at_ms,
+        is_buy: tev.tx_type === "buy",
+        sol_amount: tev.sol_amount,
+        token_amount: tev.token_amount,
+        price_sol: price,
+        usd_market_cap: null,
+        user: tev.trader ?? null,
+      };
       setTrades((prev) => {
-        // Drop dupes on signature when the seed and the WS overlap on the
-        // same trade (the WS sometimes replays a recent one on subscribe).
-        if (
-          prev.length > 0 &&
-          prev[prev.length - 1].timestamp_ms === t.timestamp_ms &&
-          prev[prev.length - 1].user === t.user
-        ) {
-          return prev;
-        }
-        const next = [...prev, t];
-        return next.length > MAX_TRADES
-          ? next.slice(next.length - MAX_TRADES)
-          : next;
+        const next = [...prev, trade];
+        return next.length > 1500 ? next.slice(next.length - 1500) : next;
       });
-    }
-
-    connect();
+    });
     return () => {
-      cancelled = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      try {
-        ws?.send(
-          JSON.stringify({
-            method: "unsubscribeTokenTrade",
-            keys: [mint],
-          }),
-        );
-      } catch {
-        /* socket may already be closing */
-      }
-      ws?.close();
-      setStreaming(false);
+      offEv();
+      offSub();
     };
   }, [mint]);
 
-  // ResizeObserver so the SVG width tracks the column.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) setWidth(Math.max(200, e.contentRect.width));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const chart = useMemo(
-    () => buildChart(trades, width, height - 56),
-    [trades, width, height],
+  // ---------------- Bucket trades → candles -----------------
+  const candles = useMemo<Candle[]>(
+    () => bucketTrades(trades, intervalSeconds),
+    [trades, intervalSeconds],
   );
 
+  // ---------------- Mount + size lightweight-charts -----------------
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const chart = createChart(el, {
+      autoSize: true,
+      layout: {
+        background: { color: "#0e0f12" },
+        textColor: "#9094a0",
+        fontSize: 11,
+        fontFamily:
+          "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace",
+      },
+      grid: {
+        vertLines: { color: "#1c1d24" },
+        horzLines: { color: "#1c1d24" },
+      },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: true,
+        borderColor: "#1c1d24",
+      },
+      rightPriceScale: {
+        borderColor: "#1c1d24",
+        scaleMargins: { top: 0.1, bottom: 0.28 },
+      },
+      crosshair: {
+        vertLine: { color: "#2a2c36" },
+        horzLine: { color: "#2a2c36" },
+      },
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: "#5fe39a",
+      downColor: "#ef6f7d",
+      wickUpColor: "#5fe39a",
+      wickDownColor: "#ef6f7d",
+      borderVisible: false,
+      priceFormat: {
+        type: "price",
+        precision: 9,
+        minMove: 0.000000001,
+      },
+    });
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+      borderVisible: false,
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+    };
+  }, []);
+
+  // Push candle data into the chart whenever it changes.
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    if (!candleSeries || !volumeSeries) return;
+    if (candles.length === 0) {
+      candleSeries.setData([]);
+      volumeSeries.setData([]);
+      return;
+    }
+    candleSeries.setData(
+      candles.map((c) => ({
+        time: c.time as Time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      })),
+    );
+    volumeSeries.setData(
+      candles.map((c) => ({
+        time: c.time as Time,
+        value: c.volume,
+        color:
+          c.close >= c.open
+            ? "rgba(95, 227, 154, 0.4)"
+            : "rgba(239, 111, 125, 0.4)",
+      })),
+    );
+    chartRef.current?.timeScale().fitContent();
+  }, [candles]);
+
+  // Stat strip at the top
   const last = trades.length ? trades[trades.length - 1] : null;
   const first = trades.length ? trades[0] : null;
   const change =
@@ -168,7 +241,7 @@ export function PumpfunChart({ mint, height }: Props) {
       : null;
 
   return (
-    <div ref={wrapRef} className="flex flex-col h-full">
+    <div className="flex flex-col h-full">
       {/* Stat strip */}
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5 gap-3 flex-wrap">
         <div className="flex items-center gap-3 font-mono text-2xs">
@@ -185,11 +258,7 @@ export function PumpfunChart({ mint, height }: Props) {
           <Stat
             label="mc"
             value={
-              last?.usd_market_cap
-                ? formatUsd(last.usd_market_cap)
-                : coin?.usd_market_cap
-                  ? formatUsd(coin.usd_market_cap)
-                  : "—"
+              coin?.usd_market_cap ? formatUsd(coin.usd_market_cap) : "—"
             }
           />
           <Stat
@@ -208,6 +277,7 @@ export function PumpfunChart({ mint, height }: Props) {
             }
           />
           <Stat label="trades" value={String(trades.length)} />
+          <Stat label="candles" value={String(candles.length)} />
           {coin?.bonding_curve_progress_pct != null && (
             <Stat
               label="curve"
@@ -220,66 +290,42 @@ export function PumpfunChart({ mint, height }: Props) {
             />
           )}
         </div>
-        <StreamPulse on={streaming} />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-0.5">
+            {INTERVALS.map((iv) => (
+              <button
+                key={iv.key}
+                type="button"
+                onClick={() => setIntervalKey(iv.key)}
+                className={cn(
+                  "font-mono text-2xs px-2 py-0.5 transition-colors border",
+                  iv.key === intervalKey
+                    ? "border-accent text-accent bg-accent/5"
+                    : "border-transparent text-fg-subtle hover:text-fg-muted",
+                )}
+              >
+                {iv.label}
+              </button>
+            ))}
+          </div>
+          <StreamPulse on={streaming} />
+        </div>
       </div>
 
-      {/* SVG canvas */}
-      <div className="flex-1 min-h-0 relative bg-bg-subtle/20">
-        {error && trades.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center font-mono text-2xs text-danger">
-            {error}
-          </div>
-        )}
-        {!error && trades.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center font-mono text-2xs text-fg-subtle">
+      {/* Chart canvas */}
+      <div className="flex-1 min-h-0 relative">
+        {trades.length === 0 && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center font-mono text-2xs text-fg-subtle pointer-events-none">
             {streaming
               ? "subscribed · waiting for first trade…"
               : "loading trades…"}
           </div>
         )}
-        {chart && (
-          <svg
-            width={width}
-            height={height - 56}
-            className="block"
-            preserveAspectRatio="none"
-          >
-            <g stroke="#1c1d24" strokeWidth="1">
-              {[0.25, 0.5, 0.75].map((f) => (
-                <line
-                  key={f}
-                  x1="0"
-                  x2={width}
-                  y1={(height - 56) * f}
-                  y2={(height - 56) * f}
-                />
-              ))}
-            </g>
-            <path
-              d={chart.areaPath}
-              fill="rgba(95,227,154,0.10)"
-              stroke="none"
-            />
-            <path
-              d={chart.linePath}
-              fill="none"
-              stroke="#5fe39a"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {chart.markers.map((m, i) => (
-              <circle
-                key={i}
-                cx={m.x}
-                cy={m.y}
-                r="1.6"
-                fill={m.isBuy ? "#5fe39a" : "#ef6f7d"}
-                opacity="0.7"
-              />
-            ))}
-          </svg>
-        )}
+        <div
+          ref={containerRef}
+          className="absolute inset-0"
+          style={{ minHeight: Math.max(0, height - 40) }}
+        />
       </div>
     </div>
   );
@@ -292,11 +338,6 @@ function StreamPulse({ on }: { on: boolean }) {
         "inline-flex items-center gap-1.5 font-mono text-2xs",
         on ? "text-accent" : "text-fg-subtle",
       )}
-      title={
-        on
-          ? "live · subscribed to pumpportal websocket"
-          : "reconnecting to pumpportal websocket…"
-      }
     >
       <span className="relative inline-flex h-1.5 w-1.5">
         {on && (
@@ -309,7 +350,7 @@ function StreamPulse({ on }: { on: boolean }) {
           )}
         />
       </span>
-      {on ? "live" : "reconnecting…"}
+      {on ? "live" : "buffering…"}
     </span>
   );
 }
@@ -335,89 +376,43 @@ function Stat({
 }
 
 /**
- * Parse a single PumpPortal trade message into the PumpTrade shape we
- * already render in the chart. Returns null for heartbeats, ack messages,
- * and trades for other mints (the WS server occasionally bleeds those
- * across subscriptions).
+ * Bucket trades into OHLC candles. lightweight-charts requires `time` in
+ * unix seconds, ascending, with no duplicates — we ensure both. Each
+ * bucket's volume is the sum of trade SOL amounts; buys/sells track count
+ * for color cues even though we color the whole candle by close vs open.
  */
-function parseTradeEvent(targetMint: string, raw: string): PumpTrade | null {
-  let v: any;
-  try {
-    v = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (v?.mint !== targetMint) return null;
-  // Lamports → SOL, raw token units → tokens (pump.fun uses 6 decimals).
-  const sol_amount =
-    typeof v.solAmount === "number" ? v.solAmount : Number(v.solAmount) || 0;
-  const token_amount =
-    typeof v.tokenAmount === "number"
-      ? v.tokenAmount
-      : Number(v.tokenAmount) || 0;
-  // Curve state gives the most accurate post-trade price.
-  const v_sol = Number(v.vSolInBondingCurve);
-  const v_tok = Number(v.vTokensInBondingCurve);
-  const price_sol =
-    Number.isFinite(v_sol) && Number.isFinite(v_tok) && v_tok > 0
-      ? v_sol / v_tok
-      : token_amount > 0
-        ? sol_amount / token_amount
-        : 0;
-  const usd_market_cap =
-    typeof v.usdMarketCap === "number"
-      ? v.usdMarketCap
-      : typeof v.marketCapUsd === "number"
-        ? v.marketCapUsd
-        : null;
-  return {
-    timestamp_ms: Date.now(),
-    is_buy: String(v.txType ?? "").toLowerCase() === "buy",
-    sol_amount,
-    token_amount,
-    price_sol,
-    usd_market_cap,
-    user: v.traderPublicKey ?? v.trader ?? null,
-  };
-}
-
-function buildChart(trades: PumpTrade[], width: number, height: number) {
-  if (trades.length < 2) return null;
-  const prices = trades.map((t) => t.price_sol).filter((p) => p > 0);
-  if (prices.length < 2) return null;
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  const range = max - min || 1;
-  const xs = trades.map((t) => t.timestamp_ms);
-  const xMin = Math.min(...xs);
-  const xMax = Math.max(...xs);
-  const xRange = xMax - xMin || 1;
-
-  const project = (t: PumpTrade) => {
-    const x = ((t.timestamp_ms - xMin) / xRange) * width;
-    const yPct = (t.price_sol - min) / range;
-    const y = height - yPct * height * 0.94 - height * 0.03;
-    return { x, y };
-  };
-
-  let linePath = "";
-  let areaPath = "";
-  const markers: { x: number; y: number; isBuy: boolean }[] = [];
-
-  trades.forEach((t, i) => {
-    if (t.price_sol <= 0) return;
-    const { x, y } = project(t);
-    linePath +=
-      i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
-    if (i === 0) areaPath += `M ${x.toFixed(1)} ${height}`;
-    areaPath += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
-    if (i === trades.length - 1) areaPath += ` L ${x.toFixed(1)} ${height} Z`;
-    if (i % Math.max(1, Math.floor(trades.length / 30)) === 0) {
-      markers.push({ x, y, isBuy: t.is_buy });
+function bucketTrades(trades: PumpTrade[], intervalSec: number): Candle[] {
+  if (trades.length === 0) return [];
+  const buckets = new Map<number, Candle>();
+  // Sort by ts ascending — pump.fun /trades/all returns newest-first; the
+  // Rust side reverses it, but be defensive.
+  const sorted = [...trades].sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+  for (const t of sorted) {
+    if (t.price_sol <= 0) continue;
+    const bucketSec =
+      Math.floor(t.timestamp_ms / 1000 / intervalSec) * intervalSec;
+    const existing = buckets.get(bucketSec);
+    if (!existing) {
+      buckets.set(bucketSec, {
+        time: bucketSec,
+        open: t.price_sol,
+        high: t.price_sol,
+        low: t.price_sol,
+        close: t.price_sol,
+        volume: t.sol_amount,
+        buys: t.is_buy ? 1 : 0,
+        sells: t.is_buy ? 0 : 1,
+      });
+    } else {
+      existing.high = Math.max(existing.high, t.price_sol);
+      existing.low = Math.min(existing.low, t.price_sol);
+      existing.close = t.price_sol;
+      existing.volume += t.sol_amount;
+      if (t.is_buy) existing.buys++;
+      else existing.sells++;
     }
-  });
-
-  return { linePath, areaPath, markers };
+  }
+  return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
 }
 
 function formatUsd(v: number | null): string {
