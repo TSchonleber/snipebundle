@@ -236,6 +236,127 @@ pub fn sign_txs(unsigned_b58: &[String], snipers: &[StoredKeypair]) -> Result<Ve
     Ok(signed)
 }
 
+/// Whether a bundle landed on-chain after submission.
+/// Pending = Jito hasn't seen / hasn't decided yet (poll again).
+/// Landed  = at least one signature reached `processed` or better.
+/// Failed  = bundle came back with an `err` (dropped, simulation failure,
+///           tip too low, etc.) so the user's tokens never changed hands.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BundleStatus {
+    Pending,
+    Landed { confirmation: String, signatures: Vec<String> },
+    Failed { reason: String },
+}
+
+/// Query Jito for the landing status of a previously-submitted bundle.
+/// Use this to confirm a buy/sell actually executed — `submit_jito_bundle`
+/// only proves Jito accepted the bundle for relay, not that it ever made
+/// it on-chain.
+pub async fn get_bundle_status(jito_url: &str, bundle_id: &str) -> Result<BundleStatus> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getBundleStatuses",
+        "params": [[bundle_id]],
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(jito_url)
+        .json(&body)
+        .send()
+        .await
+        .context("POST getBundleStatuses")?;
+    let text = resp.text().await.unwrap_or_default();
+    let v: serde_json::Value =
+        serde_json::from_str(&text).context("parse getBundleStatuses json")?;
+    if let Some(err) = v.get("error") {
+        anyhow::bail!("jito getBundleStatuses error: {err}");
+    }
+
+    let arr = v
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(|x| x.as_array());
+    let entry = match arr {
+        Some(a) if !a.is_empty() && !a[0].is_null() => &a[0],
+        _ => return Ok(BundleStatus::Pending),
+    };
+
+    if let Some(err) = entry.get("err") {
+        if !err.is_null() {
+            return Ok(BundleStatus::Failed {
+                reason: err.to_string(),
+            });
+        }
+    }
+
+    let confirmation = entry
+        .get("confirmation_status")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    let signatures = entry
+        .get("transactions")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if confirmation.is_empty() {
+        Ok(BundleStatus::Pending)
+    } else {
+        Ok(BundleStatus::Landed {
+            confirmation: confirmation.to_string(),
+            signatures,
+        })
+    }
+}
+
+/// Pre-flight SOL balance check. Bails with a clear message if any sniper
+/// wallet has less than (per-wallet buy + Jito tip + priority fee + ATA
+/// rent buffer) — those wallets would otherwise silently bounce the
+/// bundle while the UI cheerfully reports "submitted".
+async fn ensure_sufficient_sol(
+    rpc_url: &str,
+    snipers: &[StoredKeypair],
+    amounts_sol: &[f64],
+    net_tip: f64,
+    net_priority: f64,
+) -> Result<()> {
+    // ATA rent (~0.00204 SOL) + transaction fee (~0.000005) + headroom.
+    const TX_OVERHEAD_SOL: f64 = 0.003;
+    let owners: Vec<String> = snipers.iter().map(|s| s.pubkey.clone()).collect();
+    let balances = crate::balance::get_sol_balances(rpc_url, &owners).await;
+    let mut shortfalls: Vec<String> = Vec::new();
+    for (sk, amt) in snipers.iter().zip(amounts_sol) {
+        let bal = *balances.get(&sk.pubkey).unwrap_or(&0.0);
+        let need = amt + net_tip + net_priority + TX_OVERHEAD_SOL;
+        if bal + 1e-9 < need {
+            shortfalls.push(format!(
+                "{} ({}…): {:.4} SOL, need ≥{:.4} (buy {:.4} + tip {:.4} + fee {:.4} + ~0.003 overhead)",
+                sk.label,
+                &sk.pubkey[..6],
+                bal,
+                need,
+                amt,
+                net_tip,
+                net_priority
+            ));
+        }
+    }
+    if !shortfalls.is_empty() {
+        anyhow::bail!(
+            "insufficient SOL on {} wallet(s) — fund first to avoid a silent bounce:\n  - {}",
+            shortfalls.len(),
+            shortfalls.join("\n  - ")
+        );
+    }
+    Ok(())
+}
+
 pub async fn submit_jito_bundle(jito_url: &str, signed_b58: &[String]) -> Result<String> {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -290,6 +411,14 @@ pub async fn execute_buy_per_wallet(
     amounts_sol: &[f64],
     net: &NetworkConfig,
 ) -> Result<String> {
+    ensure_sufficient_sol(
+        &net.rpc_url,
+        snipers,
+        amounts_sol,
+        net.jito_tip_sol,
+        net.priority_fee_sol,
+    )
+    .await?;
     let actions = build_actions_for_buy_per_wallet(snipers, mint, amounts_sol, net)?;
     let unsigned = fetch_unsigned_txs(&net.trade_local_url, &actions).await?;
     let signed = sign_txs(&unsigned, snipers)?;

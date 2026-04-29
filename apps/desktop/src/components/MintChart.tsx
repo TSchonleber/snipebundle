@@ -34,22 +34,49 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
   const trimmed = mint.trim();
   const valid = isValidMint(trimmed);
 
-  // Decide chart source by mint shape, no roundtrip required:
-  //   - 'pump' vanity suffix → PumpfunChart (pre-migration trades + WS)
-  //   - anything else → DexScreener iframe
-  // The previous probe-then-route approach added a 500-1500ms delay
-  // before any chart rendered, plus a duplicate /coins call (PumpfunChart
-  // fetches its own seed). For pump-suffix mints, even a graduated coin
-  // works fine in PumpfunChart (the historical pre-migration trades show
-  // up immediately, and the dexscreener ↗ link in the header is one click
-  // away if the user wants Raydium candles).
+  // Pick chart source by probing pump.fun, with a vanity-suffix fallback:
+  //   - probe returns coin metadata + curve < 99 + !complete → PumpfunChart
+  //   - probe returns coin + graduated                       → DexScreener
+  //   - probe returns nothing AND mint ends in 'pump'        → PumpfunChart
+  //     (fresh mint pump.fun's frontend-api hasn't indexed yet)
+  //   - probe returns nothing for a non-pump suffix          → DexScreener
+  //
+  // Earlier we tried "pump suffix → PumpfunChart, else DexScreener" with
+  // no probe — that broke non-pump-suffix pump.fun mints (the vanity
+  // suffix isn't required, just common). And "any mint → DexScreener if
+  // not pump-suffix" stranded those on a "Loading pair…" iframe for
+  // pre-migration coins that DexScreener can never resolve. The probe
+  // costs ~500ms but is the only way to get this right for both shapes.
+  // While probing we render an explicit "resolving pair…" placeholder so
+  // the user knows something's happening.
   const [usePumpChart, setUsePumpChart] = useState<boolean | null>(null);
   useEffect(() => {
     if (!valid) {
       setUsePumpChart(null);
       return;
     }
-    setUsePumpChart(trimmed.toLowerCase().endsWith("pump"));
+    let cancelled = false;
+    setUsePumpChart(null);
+    const looksLikePumpMint = trimmed.toLowerCase().endsWith("pump");
+    ipc
+      .getPumpfunChart(trimmed)
+      .then((data) => {
+        if (cancelled) return;
+        if (data.coin) {
+          const graduated =
+            data.coin.complete === true ||
+            (data.coin.bonding_curve_progress_pct ?? 0) >= 99;
+          setUsePumpChart(!graduated);
+        } else {
+          setUsePumpChart(looksLikePumpMint);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setUsePumpChart(looksLikePumpMint);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [trimmed, valid]);
 
   return (
