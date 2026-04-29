@@ -293,6 +293,14 @@ export const ipc = {
     }),
   deleteWallet: (pubkey: string, passphrase: string) =>
     invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
+  reassignWalletRole: (
+    pubkey: string,
+    targetRole: "sniper" | "dev",
+    passphrase: string,
+  ) =>
+    invoke<void>("reassign_wallet_role", {
+      args: { pubkey, target_role: targetRole, passphrase },
+    }),
   getTrending: () => invoke<TrendingItem[]>("get_trending"),
   getPumpfunBuckets: () =>
     invoke<TrenchBuckets>("get_pumpfun_buckets"),

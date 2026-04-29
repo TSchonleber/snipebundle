@@ -38,8 +38,18 @@ export function Wallets() {
         ipc.listDevWallets().catch(() => [] as WalletInfo[]),
         ipc.loadConfig().catch(() => null),
       ]);
-      const all = [...base, ...devs];
-      setWallets(all);
+      // Tag each wallet with its role so downstream components can show
+      // a badge and offer the reassign action without re-querying.
+      const tagged: WalletInfo[] = [
+        ...base.map(
+          (w): WalletInfo => ({
+            ...w,
+            role: w.label === "master" ? "master" : "sniper",
+          }),
+        ),
+        ...devs.map((w): WalletInfo => ({ ...w, role: "dev" })),
+      ];
+      setWallets(tagged);
       setMaster(base.find((w) => w.label === "master") ?? null);
       setSnipers(base.filter((w) => w.label.startsWith("sniper")));
       const c = cfg as

@@ -80,6 +80,13 @@ export interface TrendingItem {
 export interface WalletInfo {
   label: string;
   pubkey: string;
+  /**
+   * Optional role tag the desktop app stamps onto wallets when
+   * combining `listWallets()` (master + snipers) with `listDevWallets()`,
+   * so UI can show MASTER / SNIPER / DEV badges and offer reassignment
+   * without re-querying. Backend never sets this — purely a render hint.
+   */
+  role?: "master" | "sniper" | "dev";
 }
 
 export interface WalletWithSecret extends WalletInfo {

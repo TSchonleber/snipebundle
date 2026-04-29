@@ -45,6 +45,7 @@ pub fn run() {
             commands::delete_bundle_group,
             commands::add_sniper_wallet,
             commands::delete_wallet,
+            commands::reassign_wallet_role,
             commands::get_trending,
             commands::get_pumpfun_buckets,
             commands::get_pumpfun_chart,

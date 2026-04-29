@@ -4,6 +4,7 @@ import {
   Card,
   CardBody,
   CardHeader,
+  cn,
   type WalletInfo,
 } from "@snipebundle/ui";
 import { ipc, type AppConfig, type ExitRule } from "../lib/ipc";
@@ -13,7 +14,7 @@ interface Props {
   onChanged: () => void;
 }
 
-type Mode = null | "add" | "delete";
+type Mode = null | "add" | "delete" | "reassign";
 type RuleDraft = { tp: string; sl: string; hold: string };
 
 export function WalletManager({ wallets, onChanged }: Props) {
@@ -63,6 +64,27 @@ export function WalletManager({ wallets, onChanged }: Props) {
       const w = await ipc.addSniperWallet(pass, label.trim() || undefined);
       setRevealed(w);
       setLabel("");
+      setPass("");
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Target role we're reassigning to. Only meaningful while mode === "reassign".
+  const [reassignTo, setReassignTo] = useState<"sniper" | "dev">("dev");
+
+  async function doReassign() {
+    if (!target) return;
+    setError(null);
+    if (pass.length < 12) return setError("Enter your keystore passphrase.");
+    setBusy(true);
+    try {
+      await ipc.reassignWalletRole(target.pubkey, reassignTo, pass);
+      setMode(null);
+      setTarget(null);
       setPass("");
       onChanged();
     } catch (e) {
@@ -245,6 +267,51 @@ export function WalletManager({ wallets, onChanged }: Props) {
         </CardBody>
       )}
 
+      {mode === "reassign" && target && (
+        <CardBody className="space-y-3">
+          <div className="rounded-lg border border-warn/40 bg-warn/10 p-3 text-sm">
+            Reassigning <span className="font-mono">{target.label}</span> from{" "}
+            <strong>{target.role ?? "?"}</strong> to{" "}
+            <strong>{reassignTo}</strong>. Keypair stays the same — funds
+            and on-chain identity carry over. Useful for rotating
+            already-doxxed dev wallets back into the sniper pool, or
+            promoting an unused sniper to be the next dev.
+          </div>
+          <code className="block break-all font-mono text-xs">
+            {target.pubkey}
+          </code>
+          <Field label="Keystore passphrase to confirm">
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+          </Field>
+          {error && (
+            <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setMode(null);
+                setTarget(null);
+                setPass("");
+              }}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button onClick={doReassign} disabled={busy}>
+              {busy ? "Saving…" : `Reassign to ${reassignTo}`}
+            </Button>
+          </div>
+        </CardBody>
+      )}
+
       {mode === "delete" && target && (
         <CardBody className="space-y-3">
           <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
@@ -306,6 +373,9 @@ export function WalletManager({ wallets, onChanged }: Props) {
         <ul className="space-y-2">
           {wallets.map((w) => {
             const deletable = w.label !== "master";
+            const reassignable = w.role === "sniper" || w.role === "dev";
+            const otherRole: "sniper" | "dev" =
+              w.role === "dev" ? "sniper" : "dev";
             const custom = Boolean(cfg?.wallet_exit_rules?.[w.pubkey]);
             const draft =
               ruleDrafts[w.pubkey] ??
@@ -319,12 +389,39 @@ export function WalletManager({ wallets, onChanged }: Props) {
                   <span className="font-mono text-xs uppercase tracking-wider text-fg-muted w-24 shrink-0">
                     {w.label}
                   </span>
+                  {w.role && (
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider font-mono shrink-0",
+                        w.role === "master" && "border-warn/50 text-warn",
+                        w.role === "dev" && "border-accent/50 text-accent",
+                        w.role === "sniper" && "border-border text-fg-subtle",
+                      )}
+                    >
+                      {w.role}
+                    </span>
+                  )}
                   <code className="flex-1 truncate font-mono text-[11px] text-fg-subtle">
                     {w.pubkey}
                   </code>
                   <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
                     {custom ? "custom" : "global"}
                   </span>
+                  {reassignable && (
+                    <button
+                      onClick={() => {
+                        setMode("reassign");
+                        setTarget(w);
+                        setReassignTo(otherRole);
+                        setError(null);
+                      }}
+                      className="text-xs text-fg-subtle hover:text-fg-muted px-2 py-1"
+                      disabled={mode !== null}
+                      title={`reassign as ${otherRole}`}
+                    >
+                      → {otherRole}
+                    </button>
+                  )}
                   {deletable ? (
                     <button
                       onClick={() => {

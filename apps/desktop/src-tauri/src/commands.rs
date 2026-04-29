@@ -581,6 +581,81 @@ pub async fn delete_wallet(
     Ok(())
 }
 
+#[derive(Deserialize)]
+pub struct ReassignRoleArgs {
+    pub passphrase: String,
+    pub pubkey: String,
+    /// "sniper" or "dev". Master cannot be reassigned via this command;
+    /// it always stays master to avoid orphaning the funder.
+    pub target_role: String,
+}
+
+/// Move a wallet between the sniper and dev pools without changing its
+/// keypair, label, or on-chain identity. Lets the user rotate dev wallets
+/// (which should be doxxed-burnt after each launch) into the sniper pool
+/// for re-use, and conversely promote unused snipers to dev wallets when
+/// they need a fresh launch identity.
+#[tauri::command]
+pub async fn reassign_wallet_role(
+    args: ReassignRoleArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let target = args.target_role.as_str();
+    if !matches!(target, "sniper" | "dev") {
+        return Err(format!(
+            "target_role must be 'sniper' or 'dev' (got '{}')",
+            args.target_role
+        ));
+    }
+
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+
+    if let Some(m) = &ks.master {
+        if m.pubkey == args.pubkey {
+            return Err(
+                "master wallet can't be reassigned — would orphan funder responsibilities"
+                    .into(),
+            );
+        }
+    }
+
+    // Find the wallet in either pool and remove it; preserves its
+    // StoredKeypair contents (label, secret) so reassign is purely a
+    // role swap, never a re-encrypt.
+    let mut moved: Option<StoredKeypair> = None;
+    let mut from_role: &str = "?";
+    if let Some(idx) = ks.snipers.iter().position(|w| w.pubkey == args.pubkey) {
+        moved = Some(ks.snipers.remove(idx));
+        from_role = "sniper";
+    } else if let Some(idx) = ks.dev_wallets.iter().position(|w| w.pubkey == args.pubkey) {
+        moved = Some(ks.dev_wallets.remove(idx));
+        from_role = "dev";
+    }
+
+    let kp = moved.ok_or_else(|| format!("no wallet with pubkey {} in keystore", args.pubkey))?;
+    if from_role == target {
+        // Already in the target pool — put it back and no-op so we don't
+        // accidentally rewrite the keystore for nothing.
+        match target {
+            "sniper" => ks.snipers.push(kp),
+            "dev" => ks.dev_wallets.push(kp),
+            _ => unreachable!(),
+        }
+        return Err(format!("wallet is already a {target} wallet"));
+    }
+
+    match target {
+        "sniper" => ks.snipers.push(kp),
+        "dev" => ks.dev_wallets.push(kp),
+        _ => unreachable!(),
+    }
+
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_dev_wallets(state: State<'_, AppState>) -> Result<Vec<WalletInfo>> {
     let guard = state.keystore.lock().await;
