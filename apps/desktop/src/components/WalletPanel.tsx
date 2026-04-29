@@ -365,7 +365,8 @@ export function WalletPanel({
           <ProfileSetEditor
             initial={templates}
             title="Shared profile templates"
-            subtitle="Applies to every wallet bound to a template"
+            subtitle="changes apply to every wallet bound to a template"
+            warnShared
             onSave={(next) => {
               saveTemplates(next);
               closeTemplates();
@@ -964,12 +965,19 @@ function ProfileSetEditor({
   initial,
   title,
   subtitle,
+  warnShared,
   onSave,
   onCancel,
 }: {
   initial: ExitProfile[];
   title?: string;
   subtitle?: string;
+  /**
+   * When true, render a prominent warn callout: "editing here retunes every
+   * wallet bound to that template." Set this when editing the Config-level
+   * templates list, NOT a single wallet's custom slot.
+   */
+  warnShared?: boolean;
   onSave: (next: ExitProfile[]) => void;
   onCancel: () => void;
 }) {
@@ -1025,15 +1033,23 @@ function ProfileSetEditor({
   }
 
   return (
-    <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
+    <div className="border border-accent/30 bg-accent/5 p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-accent">
+        <span className="font-mono text-2xs text-accent">
           {title ?? "Profiles for this wallet"}
         </span>
-        <span className="text-[10px] text-fg-subtle">
+        <span className="font-mono text-2xs text-fg-subtle">
           {subtitle ?? "changes apply on next match"}
         </span>
       </div>
+
+      {warnShared && (
+        <div className="border-l-2 border-warn bg-warn/5 px-2 py-1.5 font-mono text-2xs text-warn leading-snug">
+          shared templates — editing any row retunes every wallet bound to
+          that template. to change one wallet only, switch it to{" "}
+          <span className="text-fg">custom</span> and edit its custom slot.
+        </div>
+      )}
       <div className="grid grid-cols-[auto_1fr_60px_60px_60px_24px] gap-2 items-center text-[10px] text-fg-subtle uppercase tracking-wider">
         <span></span>
         <span>label</span>
