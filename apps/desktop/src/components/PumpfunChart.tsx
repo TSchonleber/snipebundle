@@ -145,20 +145,21 @@ export function PumpfunChart({ mint, height }: Props) {
   }, [mint]);
 
   // ---------------- Auto-pick interval based on data density -----------------
-  // Target ~5 trades per candle so OHLC actually has a body — single-trade
+  // Target ≥8 trades per candle so OHLC actually has a body — single-trade
   // buckets render as flat horizontal lines because open=close=high=low.
-  // Picking purely by timespan was wrong: a fresh coin with 20 trades in
-  // 30s defaulted to 1s buckets, producing 20 invisible candles instead
-  // of 6 readable 5s ones.
+  // Floors at 5s no matter what: 1s buckets on sparse data are just a
+  // wall of horizontal lines and useless. Coarser is better than finer
+  // when the data is thin.
   useEffect(() => {
     if (!intervalAuto || trades.length < 2) return;
     const span =
       (trades[trades.length - 1].timestamp_ms - trades[0].timestamp_ms) / 1000;
     if (span <= 0) return;
-    const idealSec = (5 * span) / trades.length;
+    const idealSec = (8 * span) / trades.length;
     let next: IntervalKey;
-    if (idealSec <= 2) next = "1s";
-    else if (idealSec <= 10) next = "5s";
+    // Floor at 5s — never auto-pick 1s. Reserved for explicit user
+    // override when they want a tick-by-tick view of a hot coin.
+    if (idealSec <= 8) next = "5s";
     else if (idealSec <= 60) next = "30s";
     else if (idealSec <= 300) next = "1m";
     else next = "5m";
@@ -193,10 +194,10 @@ export function PumpfunChart({ mint, height }: Props) {
         timeVisible: true,
         secondsVisible: true,
         borderColor: "#1c1d24",
-        // Default candles are wide enough to read at a glance; user can
-        // wheel-zoom in/out from there. Bigger than the 8px we shipped in
-        // 0.1.37 — that left tiny matchsticks bunched at the right edge.
-        barSpacing: 14,
+        // Tight default so a sparse coin's 10-15 candles don't fill the
+        // whole canvas. setVisibleLogicalRange below picks the right
+        // initial zoom; bar spacing is just the minimum visual width.
+        barSpacing: 10,
         minBarSpacing: 1,
         rightOffset: 8,
       },
@@ -267,6 +268,12 @@ export function PumpfunChart({ mint, height }: Props) {
     };
   }, []);
 
+  // Track the timestamp of the last candle we've pushed so we can do
+  // incremental .update() calls for new bars instead of full setData()
+  // rewrites — setData on every WS trade was causing the visible
+  // flicker / "skipping" the user reported.
+  const lastCandleTimeRef = useRef<number>(0);
+
   // Push candle data into the chart whenever it changes.
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -275,48 +282,85 @@ export function PumpfunChart({ mint, height }: Props) {
     if (candles.length === 0) {
       candleSeries.setData([]);
       volumeSeries.setData([]);
+      lastCandleTimeRef.current = 0;
+      hasFittedRef.current = false;
       return;
     }
-    candleSeries.setData(
-      candles.map((c) => ({
-        time: c.time as Time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      })),
-    );
-    volumeSeries.setData(
-      candles.map((c) => ({
-        time: c.time as Time,
-        value: c.volume,
-        color:
-          c.close >= c.open
-            ? "rgba(95, 227, 154, 0.4)"
-            : "rgba(239, 111, 125, 0.4)",
-      })),
-    );
-    // Stay pinned to the right edge for live updates. On first load show
-    // the whole seeded history at a sane density.
+
+    const lastTime = lastCandleTimeRef.current;
+    const newestTime = candles[candles.length - 1].time;
+
+    // First load OR interval-change OR the candle history grew by more
+    // than a couple bars (e.g. ws reconnect + replay) → rewrite the
+    // whole series. Otherwise just update the last 1-2 candles, which
+    // is the live path and avoids the full-redraw flicker.
+    const seriesShouldRewrite =
+      !hasFittedRef.current ||
+      lastTime === 0 ||
+      newestTime < lastTime ||
+      candles.length === 1;
+
+    if (seriesShouldRewrite) {
+      candleSeries.setData(
+        candles.map((c) => ({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        })),
+      );
+      volumeSeries.setData(
+        candles.map((c) => ({
+          time: c.time as Time,
+          value: c.volume,
+          color:
+            c.close >= c.open
+              ? "rgba(95, 227, 154, 0.4)"
+              : "rgba(239, 111, 125, 0.4)",
+        })),
+      );
+    } else {
+      // Incremental: update the last few bars (the bucket the live
+      // trade just landed in is open and might mutate over multiple
+      // ticks before rolling).
+      const tail = candles.slice(-3);
+      for (const c of tail) {
+        candleSeries.update({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+        volumeSeries.update({
+          time: c.time as Time,
+          value: c.volume,
+          color:
+            c.close >= c.open
+              ? "rgba(95, 227, 154, 0.4)"
+              : "rgba(239, 111, 125, 0.4)",
+        });
+      }
+    }
+
+    lastCandleTimeRef.current = newestTime;
+
+    // First-load zoom: show the most recent ~50 bars worth of width.
+    // No fitContent — that stretches a sparse coin's 10 candles across
+    // the whole canvas at ~150px each, the "super zoomed in" effect.
+    // Subsequent updates just stay pinned to the right edge.
     const timeScale = chartRef.current?.timeScale();
-    if (!hasFittedRef.current && candles.length > 1) {
-      timeScale?.fitContent();
+    if (!hasFittedRef.current && candles.length > 0) {
+      const visibleBars = Math.min(50, Math.max(20, candles.length));
+      const lastIdx = candles.length - 1;
+      timeScale?.setVisibleLogicalRange({
+        from: lastIdx - visibleBars + 1,
+        to: lastIdx + 8, // +8 for the rightOffset breathing room
+      });
       hasFittedRef.current = true;
     } else {
       timeScale?.scrollToRealTime();
-    }
-  }, [candles]);
-
-  // fitContent stretches a sparse coin's 10-15 candles across the entire
-  // canvas — each candle becomes huge, the chart feels "zoomed in", and
-  // there's no headroom for the latest trades. After every data refresh
-  // clamp the bar width so candles stay readable at GMGN-like density.
-  useEffect(() => {
-    const ts = chartRef.current?.timeScale();
-    if (!ts) return;
-    const opts = ts.options();
-    if (opts.barSpacing && opts.barSpacing > 24) {
-      ts.applyOptions({ barSpacing: 14 });
     }
   }, [candles]);
 
@@ -330,52 +374,61 @@ export function PumpfunChart({ mint, height }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Stat strip */}
+      {/* Stat strip — primary line: symbol, price, mc, window %.
+          Secondary metrics (trades, candles, curve) hang on the right
+          end smaller so the price/MC information dominates visually. */}
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5 gap-3 flex-wrap">
         <div className="flex items-center gap-3 font-mono text-2xs">
           {coin?.symbol && (
-            <span className="text-fg font-semibold">
+            <span className="text-sm font-semibold text-fg">
               {coin.symbol.toUpperCase()}
             </span>
           )}
-          <Stat
-            label="price"
-            value={last ? formatPrice(last.price_sol) : "—"}
-            unit="SOL"
-          />
-          <Stat
-            label="mc"
-            value={
-              coin?.usd_market_cap ? formatUsd(coin.usd_market_cap) : "—"
-            }
-          />
-          <Stat
-            label="window"
-            value={
+          <span className="inline-flex items-baseline gap-1">
+            <span className="text-fg-subtle">price</span>
+            <span className="text-sm text-fg tabular-nums">
+              {last ? formatPrice(last.price_sol) : "—"}
+            </span>
+            <span className="text-[9px] text-fg-subtle">SOL</span>
+          </span>
+          <span className="inline-flex items-baseline gap-1">
+            <span className="text-fg-subtle">mc</span>
+            <span className="text-fg tabular-nums">
+              {coin?.usd_market_cap ? formatUsd(coin.usd_market_cap) : "—"}
+            </span>
+          </span>
+          <span
+            className={cn(
+              "inline-flex items-baseline gap-1 px-1.5 py-0.5 rounded",
               change == null
-                ? "—"
-                : `${change >= 0 ? "+" : ""}${change.toFixed(1)}%`
-            }
-            valueClass={
-              change == null
-                ? "text-fg-subtle"
+                ? ""
                 : change >= 0
-                  ? "text-accent"
-                  : "text-danger"
-            }
-          />
-          <Stat label="trades" value={String(trades.length)} />
-          <Stat label="candles" value={String(candles.length)} />
+                  ? "bg-accent/10 text-accent"
+                  : "bg-danger/10 text-danger",
+            )}
+          >
+            <span className="opacity-70">window</span>
+            <span className="font-semibold tabular-nums">
+              {change == null
+                ? "—"
+                : `${change >= 0 ? "+" : ""}${change.toFixed(1)}%`}
+            </span>
+          </span>
+          <span className="text-fg-subtle/70">·</span>
+          <span className="text-fg-subtle text-[10px]">
+            {trades.length} trades · {candles.length} candles
+          </span>
           {coin?.bonding_curve_progress_pct != null && (
-            <Stat
-              label="curve"
-              value={`${coin.bonding_curve_progress_pct.toFixed(1)}%`}
-              valueClass={
+            <span
+              className={cn(
+                "text-[10px] tabular-nums",
                 coin.bonding_curve_progress_pct >= 70
                   ? "text-warn"
-                  : "text-fg"
-              }
-            />
+                  : "text-fg-subtle",
+              )}
+            >
+              curve {coin.bonding_curve_progress_pct.toFixed(0)}%
+            </span>
           )}
         </div>
         <div className="flex items-center gap-3">

@@ -195,12 +195,12 @@ export function Launch() {
         }
       }
 
-      // Hand off to the sniper dashboard so the user lands on a view
-      // that's set up for live trade management (positions list, exit
-      // controls, P&L). 1.5s delay so the success banner is visible
-      // before the page swap.
+      // Hand off to the trade view so the user lands directly on the
+      // sell card — and that card's rebuy chain (v0.1.51+v0.1.52) is
+      // wired up so a sell-then-buy bundle works out of the box. 1.5s
+      // delay so the success banner is visible before the page swap.
       window.setTimeout(() => {
-        navigate(`/dashboard?mint=${encodeURIComponent(res.mint)}`);
+        navigate(`/trade?mint=${encodeURIComponent(res.mint)}`);
       }, 1500);
     } catch (e) {
       setError(String(e));

@@ -197,14 +197,17 @@ export function MultiLaunchPanel({ devWallets, snipers, onComplete }: Props) {
       const res = await ipc.launchMultipleTokens(built);
       setResults(res);
       onComplete?.();
-      // If at least one token landed, hand off to the sniper dashboard
-      // for trade management — that's where positions list + exit
-      // controls live. 2.5s delay so the per-token result strip is
-      // visible long enough to copy any mints.
-      const landed = res.filter((r) => !r.error);
-      if (landed.length > 0) {
+      // If at least one token landed, hand off to /trade focused on
+      // the first successful mint — that page has the rebuy chain
+      // wired into its sell card (v0.1.51+v0.1.52) so a sell-then-buy
+      // bundle works out of the box. User can switch the active mint
+      // from the inline input on /trade once they're there. 2.5s delay
+      // so the result strip stays readable for copying mints.
+      const landed = res.filter((r) => !r.error && r.mint);
+      if (landed.length > 0 && landed[0].mint) {
+        const mint = landed[0].mint;
         window.setTimeout(() => {
-          navigate("/dashboard");
+          navigate(`/trade?mint=${encodeURIComponent(mint)}`);
         }, 2500);
       }
     } catch (e) {
