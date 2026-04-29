@@ -10,6 +10,7 @@ import {
 } from "@snipebundle/ui";
 import { ipc, type AmountStrategy } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { MintChart } from "../components/MintChart";
 
 interface BundleRecord {
   kind: "buy" | "sell";
@@ -165,6 +166,10 @@ export function Trade() {
           <span className="font-mono text-2xs text-fg-subtle">
             // manual buy / sell — up to 5 wallets per bundle
           </span>
+        </div>
+
+        <div className="mb-5">
+          <MintChart mint={mint} height={340} />
         </div>
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">

@@ -8,6 +8,7 @@ import {
 } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { MintChart } from "../components/MintChart";
 import { SniperSettings } from "../components/SniperSettings";
 import { WalletPanel } from "../components/WalletPanel";
 
@@ -27,6 +28,7 @@ export function Dashboard() {
   const [activeMint, setActiveMint] = useState("");
   const [section, setSection] = useState<Section>("feed");
   const [showSettings, setShowSettings] = useState(false);
+  const [showChart, setShowChart] = useState(true);
 
   useEffect(() => {
     let mounted = true;
@@ -124,6 +126,29 @@ export function Dashboard() {
         </div>
 
         <PnlBar state={state} />
+
+        {/* Live chart — defaults to active mint from sidebar, falls back to
+            the most recently opened position. Toggleable via the section bar. */}
+        {showChart && (
+          <div className="my-4">
+            <MintChart
+              mint={
+                activeMint || state?.positions[0]?.mint || ""
+              }
+              height={300}
+              onClose={() => setShowChart(false)}
+            />
+          </div>
+        )}
+        {!showChart && (
+          <button
+            type="button"
+            onClick={() => setShowChart(true)}
+            className="font-mono text-2xs text-fg-subtle hover:text-fg-muted my-2"
+          >
+            + show chart
+          </button>
+        )}
 
         {error && (
           <div className="my-3 border-l-2 border-danger bg-danger/5 px-3 py-2 font-mono text-2xs text-danger">
