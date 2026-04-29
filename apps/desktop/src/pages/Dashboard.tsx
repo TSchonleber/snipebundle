@@ -132,10 +132,9 @@ export function Dashboard() {
         {showChart && (
           <div className="my-4">
             <MintChart
-              mint={
-                activeMint || state?.positions[0]?.mint || ""
-              }
+              mint={activeMint || state?.positions[0]?.mint || ""}
               height={300}
+              onMintChange={setActiveMint}
               onClose={() => setShowChart(false)}
             />
           </div>

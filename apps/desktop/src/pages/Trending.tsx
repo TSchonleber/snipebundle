@@ -65,6 +65,11 @@ export function Trending() {
     nav(`/trade?mint=${encodeURIComponent(item.mint)}`);
   }
 
+  function handleChart(item: TrendingItem) {
+    if (!item.mint) return;
+    nav(`/chart?mint=${encodeURIComponent(item.mint)}`);
+  }
+
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
@@ -132,7 +137,7 @@ export function Trending() {
             <span className="w-16 text-right">24h %</span>
             <span className="w-24 text-right">Vol 24h</span>
             <span className="w-24 text-right">MC</span>
-            <span className="w-40 text-right">Actions</span>
+            <span className="w-52 text-right">Actions</span>
           </div>
           {filtered.length === 0 && !loading ? (
             <CardBody className="text-center text-fg-subtle">
@@ -146,6 +151,7 @@ export function Trending() {
                   item={item}
                   onLaunch={() => handleLaunch(item)}
                   onSnipe={() => handleSnipe(item)}
+                  onChart={() => handleChart(item)}
                 />
               ))}
             </div>
@@ -181,10 +187,12 @@ function TrendingRow({
   item,
   onLaunch,
   onSnipe,
+  onChart,
 }: {
   item: TrendingItem;
   onLaunch: () => void;
   onSnipe: () => void;
+  onChart: () => void;
 }) {
   const change = item.change_pct_24h;
   const changeStr =
@@ -199,15 +207,26 @@ function TrendingRow({
         : "text-danger";
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 items-center border-b border-border/40 px-4 py-2.5 text-sm hover:bg-bg-subtle/40">
-      <div className="min-w-0">
+      <button
+        type="button"
+        onClick={onChart}
+        disabled={!item.mint}
+        className="min-w-0 text-left disabled:cursor-default group"
+        title={item.mint ? "open chart" : "no mint address available"}
+      >
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-fg">
+          <span
+            className={cn(
+              "font-semibold transition-colors",
+              item.mint
+                ? "text-fg group-hover:text-accent"
+                : "text-fg-muted",
+            )}
+          >
             {item.symbol ?? "—"}
           </span>
           {item.name && (
-            <span className="text-xs text-fg-muted truncate">
-              {item.name}
-            </span>
+            <span className="text-xs text-fg-muted truncate">{item.name}</span>
           )}
           <SourceBadge source={item.source} />
           {item.age_minutes != null && item.age_minutes < 60 * 24 && (
@@ -217,11 +236,11 @@ function TrendingRow({
           )}
         </div>
         {item.mint && (
-          <code className="mt-0.5 block break-all font-mono text-[10px] text-fg-subtle">
+          <code className="mt-0.5 block break-all font-mono text-[10px] text-fg-subtle group-hover:text-fg-muted">
             {item.mint}
           </code>
         )}
-      </div>
+      </button>
       <span className="w-20 text-right font-mono text-xs tabular-nums">
         {item.price_usd != null ? `$${formatPrice(item.price_usd)}` : "—"}
       </span>
@@ -239,7 +258,16 @@ function TrendingRow({
       <span className="w-24 text-right font-mono text-xs tabular-nums text-fg-muted">
         {item.market_cap_usd != null ? `$${formatBig(item.market_cap_usd)}` : "—"}
       </span>
-      <div className="w-40 flex justify-end gap-1.5">
+      <div className="w-52 flex justify-end gap-1.5">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onChart}
+          disabled={!item.mint}
+          title={item.mint ? "open chart" : "no mint address available"}
+        >
+          Chart
+        </Button>
         <Button size="sm" variant="ghost" onClick={onLaunch}>
           Launch
         </Button>

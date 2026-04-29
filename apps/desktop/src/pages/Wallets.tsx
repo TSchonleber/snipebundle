@@ -123,11 +123,13 @@ export function Wallets() {
 
         {section === "wallets" && wallets.length > 0 && (
           <>
-            {activeMint && (
-              <div className="mb-4">
-                <MintChart mint={activeMint} height={280} />
-              </div>
-            )}
+            <div className="mb-4">
+              <MintChart
+                mint={activeMint}
+                height={280}
+                onMintChange={setActiveMint}
+              />
+            </div>
             <WalletPanel
               wallets={wallets}
               mode="full"

@@ -19,28 +19,58 @@ const SOURCES: { id: Source; label: string; build: (mint: string) => string }[] 
 
 interface Props {
   mint: string;
-  /** Visual height in pixels. Defaults to 360. */
+  /**
+   * Visual height in pixels. Pass `undefined` (or 0) to fill the parent —
+   * the dedicated /chart page uses this to take the full screen.
+   */
   height?: number;
   /** Called when the user wants to dismiss / close the chart. */
   onClose?: () => void;
+  /**
+   * If provided, the header's mint cell becomes an editable input — the
+   * user can paste a new mint right on the chart instead of hunting for
+   * the wallet panel's mint field. Pages that own a single shared mint
+   * pass their setter here.
+   */
+  onMintChange?: (next: string) => void;
 }
 
-export function MintChart({ mint, height = 360, onClose }: Props) {
+export function MintChart({ mint, height, onClose, onMintChange }: Props) {
+  const fill = !height;
+  const resolvedHeight = height ?? 360;
+  const editable = !!onMintChange;
   const [source, setSource] = useState<Source>("dexscreener");
   const trimmed = mint.trim();
   const valid = isValidMint(trimmed);
   const active = SOURCES.find((s) => s.id === source) ?? SOURCES[0];
 
   return (
-    <div className="border border-border bg-bg-subtle/30">
+    <div
+      className={cn(
+        "border border-border bg-bg-subtle/30",
+        fill && "flex flex-col h-full",
+      )}
+    >
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5 gap-3">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <span className="font-mono text-2xs text-fg-subtle shrink-0">
             chart &gt;
           </span>
-          <span className="font-mono text-2xs text-fg-muted truncate">
-            {valid ? `${trimmed.slice(0, 8)}..${trimmed.slice(-4)}` : "no mint"}
-          </span>
+          {editable ? (
+            <input
+              value={mint}
+              onChange={(e) => onMintChange!(e.target.value)}
+              placeholder="paste pump.fun mint to load"
+              spellCheck={false}
+              className="flex-1 min-w-0 bg-transparent font-mono text-2xs text-fg-muted focus:text-fg focus:outline-none placeholder:text-fg-subtle/60"
+            />
+          ) : (
+            <span className="font-mono text-2xs text-fg-muted truncate">
+              {valid
+                ? `${trimmed.slice(0, 8)}..${trimmed.slice(-4)}`
+                : "no mint"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <div className="flex items-center gap-0.5">
@@ -83,7 +113,10 @@ export function MintChart({ mint, height = 360, onClose }: Props) {
           )}
         </div>
       </div>
-      <div style={{ height }} className="relative">
+      <div
+        style={fill ? undefined : { height: resolvedHeight }}
+        className={cn("relative", fill && "flex-1 min-h-0")}
+      >
         {valid ? (
           <iframe
             // re-mount on mint or source change so the iframe doesn't carry
