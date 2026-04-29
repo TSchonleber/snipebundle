@@ -10,6 +10,7 @@ import {
 } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { TokenIcon } from "../components/TokenIcon";
 
 const REFRESH_MS = 30_000;
 
@@ -211,35 +212,46 @@ function TrendingRow({
         type="button"
         onClick={onChart}
         disabled={!item.mint}
-        className="min-w-0 text-left disabled:cursor-default group"
+        className="min-w-0 text-left disabled:cursor-default group flex items-center gap-3"
         title={item.mint ? "open chart" : "no mint address available"}
       >
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "font-semibold transition-colors",
-              item.mint
-                ? "text-fg group-hover:text-accent"
-                : "text-fg-muted",
-            )}
-          >
-            {item.symbol ?? "—"}
-          </span>
-          {item.name && (
-            <span className="text-xs text-fg-muted truncate">{item.name}</span>
-          )}
-          <SourceBadge source={item.source} />
-          {item.age_minutes != null && item.age_minutes < 60 * 24 && (
-            <span className="text-[10px] font-mono text-fg-subtle uppercase tracking-wider">
-              {formatAge(item.age_minutes)}
+        <TokenIcon src={item.image_url} symbol={item.symbol} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className={cn(
+                "font-semibold transition-colors",
+                item.mint
+                  ? "text-fg group-hover:text-accent"
+                  : "text-fg-muted",
+              )}
+            >
+              {item.symbol ?? "—"}
             </span>
+            {item.name && (
+              <span className="text-xs text-fg-muted truncate">{item.name}</span>
+            )}
+            <SourceBadge source={item.source} />
+            {item.boost_amount != null && item.boost_amount > 0 && (
+              <span
+                className="border border-warn/50 bg-warn/10 px-1.5 py-0 font-mono text-[9px] uppercase tracking-wider text-warn"
+                title={`paid promotion (boost ${item.boost_amount})`}
+              >
+                boost {Math.round(item.boost_amount)}
+              </span>
+            )}
+            {item.age_minutes != null && item.age_minutes < 60 * 24 && (
+              <span className="text-[10px] font-mono text-fg-subtle uppercase tracking-wider">
+                {formatAge(item.age_minutes)}
+              </span>
+            )}
+          </div>
+          {item.mint && (
+            <code className="mt-0.5 block break-all font-mono text-[10px] text-fg-subtle group-hover:text-fg-muted">
+              {item.mint}
+            </code>
           )}
         </div>
-        {item.mint && (
-          <code className="mt-0.5 block break-all font-mono text-[10px] text-fg-subtle group-hover:text-fg-muted">
-            {item.mint}
-          </code>
-        )}
       </button>
       <span className="w-20 text-right font-mono text-xs tabular-nums">
         {item.price_usd != null ? `$${formatPrice(item.price_usd)}` : "—"}

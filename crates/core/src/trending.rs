@@ -33,6 +33,12 @@ pub struct TrendingItem {
     pub url: Option<String>,
     pub age_minutes: Option<i64>,
     pub dex_id: Option<String>,
+    /// Token icon URL (DexScreener `info.imageUrl` for pairs, `icon` for boosts).
+    /// None when the source doesn't expose one (e.g. GeckoTerminal trending pools).
+    pub image_url: Option<String>,
+    /// DexScreener boost amount in their internal credits — Some(n>0) means the
+    /// project paid to promote this token. UI shows a "BOOSTED" badge for these.
+    pub boost_amount: Option<f64>,
 }
 
 /// Fetch from all sources in parallel; deduplicate by mint, prefer the
@@ -100,6 +106,11 @@ fn merge_better(into: &mut TrendingItem, other: &TrendingItem) {
     prefer_some!(url);
     prefer_some!(age_minutes);
     prefer_some!(dex_id);
+    prefer_some!(image_url);
+    // Boost amount: keep the larger paid signal so a boosted entry wins.
+    if other.boost_amount.unwrap_or(0.0) > into.boost_amount.unwrap_or(0.0) {
+        into.boost_amount = other.boost_amount;
+    }
 }
 
 pub async fn fetch_dexscreener_trending() -> Result<Vec<TrendingItem>> {
@@ -154,6 +165,14 @@ fn parse_dexscreener_boost(entry: &serde_json::Value) -> Option<TrendingItem> {
         .get("description")
         .and_then(|x| x.as_str())
         .map(String::from);
+    let image_url = entry
+        .get("icon")
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let boost_amount = entry
+        .get("amount")
+        .and_then(|x| x.as_f64())
+        .filter(|v| *v > 0.0);
     Some(TrendingItem {
         source: "dexscreener-boost".into(),
         name: description,
@@ -166,6 +185,8 @@ fn parse_dexscreener_boost(entry: &serde_json::Value) -> Option<TrendingItem> {
         url,
         age_minutes: None,
         dex_id: None,
+        image_url,
+        boost_amount,
     })
 }
 
@@ -199,6 +220,16 @@ fn parse_dexscreener_pair(p: &serde_json::Value) -> Option<TrendingItem> {
         .or_else(|| p.get("fdv").and_then(|x| x.as_f64()));
     let url = p.get("url").and_then(|x| x.as_str()).map(String::from);
     let dex_id = p.get("dexId").and_then(|x| x.as_str()).map(String::from);
+    let image_url = p
+        .get("info")
+        .and_then(|i| i.get("imageUrl"))
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let boost_amount = p
+        .get("boosts")
+        .and_then(|b| b.get("active"))
+        .and_then(|x| x.as_f64())
+        .filter(|v| *v > 0.0);
     let age_minutes = p
         .get("pairCreatedAt")
         .and_then(|x| x.as_i64())
@@ -222,6 +253,8 @@ fn parse_dexscreener_pair(p: &serde_json::Value) -> Option<TrendingItem> {
         url,
         age_minutes,
         dex_id,
+        image_url,
+        boost_amount,
     })
 }
 
@@ -338,6 +371,8 @@ pub async fn fetch_geckoterminal_trending() -> Result<Vec<TrendingItem>> {
                 .map(|addr| format!("https://www.geckoterminal.com/solana/pools/{addr}")),
             age_minutes: None,
             dex_id: None,
+            image_url: None,
+            boost_amount: None,
         });
     }
 

@@ -73,6 +73,8 @@ export interface TrendingItem {
   url: string | null;
   age_minutes: number | null;
   dex_id: string | null;
+  image_url: string | null;
+  boost_amount: number | null;
 }
 
 export interface WalletInfo {
