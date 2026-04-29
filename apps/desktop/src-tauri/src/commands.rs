@@ -387,6 +387,12 @@ pub async fn get_trending() -> Result<Vec<snipebundle_core::trending::TrendingIt
     Ok(snipebundle_core::trending::fetch_all().await)
 }
 
+#[tauri::command]
+pub async fn get_pumpfun_buckets()
+-> Result<snipebundle_core::trending::TrenchBuckets> {
+    Ok(snipebundle_core::trending::fetch_pumpfun_buckets().await)
+}
+
 #[derive(Deserialize)]
 pub struct ManualBuyArgs {
     pub mint: String,

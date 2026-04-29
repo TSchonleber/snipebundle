@@ -7,6 +7,7 @@ interface AppNavProps {
 
 const TABS = [
   { to: "/dashboard", label: "sniper" },
+  { to: "/trenches", label: "trenches" },
   { to: "/chart", label: "chart" },
   { to: "/trade", label: "trade" },
   { to: "/launch", label: "launch" },

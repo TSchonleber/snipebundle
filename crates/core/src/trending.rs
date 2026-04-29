@@ -28,6 +28,12 @@ const GECKOTERMINAL_TRENDING: &str =
     "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token,quote_token";
 const PUMPFUN_FOR_YOU: &str =
     "https://frontend-api-v3.pump.fun/coins/for-you?offset=0&limit=40&includeNsfw=false";
+const PUMPFUN_NEW: &str =
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false";
+const PUMPFUN_ALMOST: &str =
+    "https://frontend-api-v3.pump.fun/coins/king-of-the-hill?includeNsfw=false&offset=0&limit=30";
+const PUMPFUN_MIGRATED: &str =
+    "https://frontend-api-v3.pump.fun/coins/currently-live?offset=0&limit=30&includeNsfw=false";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TrendingItem {
@@ -631,6 +637,144 @@ pub async fn fetch_pumpfun_live() -> Result<Vec<TrendingItem>> {
             dex_id: Some("pumpfun".into()),
             image_url,
             boost_amount: None,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// GMGN-style trenches: three live buckets sourced from pump.fun's frontend API.
+// ---------------------------------------------------------------------------
+
+/// One coin in a trenches bucket. Richer than TrendingItem because we want
+/// the bonding-curve progress, holder count, social links etc. that GMGN
+/// surfaces. Only populated by the pump.fun frontend API, so all fields are
+/// best-effort optional.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrenchCoin {
+    pub mint: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub image_url: Option<String>,
+    pub creator: Option<String>,
+    pub created_at_ms: Option<i64>,
+    pub age_minutes: Option<i64>,
+    pub usd_market_cap: Option<f64>,
+    pub virtual_sol_reserves: Option<f64>,
+    pub virtual_token_reserves: Option<f64>,
+    pub bonding_curve_progress_pct: Option<f64>,
+    pub complete: Option<bool>,
+    pub raydium_pool: Option<String>,
+    pub twitter: Option<String>,
+    pub telegram: Option<String>,
+    pub website: Option<String>,
+    pub reply_count: Option<i64>,
+    pub last_trade_at_ms: Option<i64>,
+}
+
+/// Three live buckets matching GMGN's "trenches" UX.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct TrenchBuckets {
+    /// Newly created tokens, sort by created_timestamp desc.
+    pub new: Vec<TrenchCoin>,
+    /// Bonding curve filling up — close to graduating to Raydium.
+    pub almost: Vec<TrenchCoin>,
+    /// Already migrated to Raydium (post-graduation).
+    pub migrated: Vec<TrenchCoin>,
+}
+
+pub async fn fetch_pumpfun_buckets() -> TrenchBuckets {
+    let (n, a, m) = tokio::join!(
+        fetch_pumpfun_endpoint(PUMPFUN_NEW),
+        fetch_pumpfun_endpoint(PUMPFUN_ALMOST),
+        fetch_pumpfun_endpoint(PUMPFUN_MIGRATED),
+    );
+    TrenchBuckets {
+        new: n.unwrap_or_default(),
+        almost: a.unwrap_or_default(),
+        migrated: m.unwrap_or_default(),
+    }
+}
+
+async fn fetch_pumpfun_endpoint(url: &str) -> Result<Vec<TrenchCoin>> {
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("pumpfun client build")?;
+    let resp = client
+        .get(url)
+        .header("accept", "application/json")
+        .header("origin", "https://pump.fun")
+        .header("referer", "https://pump.fun/")
+        .send()
+        .await
+        .context("pumpfun fetch")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("pumpfun status {} for {}", resp.status(), url);
+    }
+    let json: serde_json::Value = resp.json().await.context("pumpfun parse")?;
+    let arr = match &json {
+        serde_json::Value::Array(a) => a.as_slice(),
+        // king-of-the-hill returns a single object — wrap it.
+        serde_json::Value::Object(_) => std::slice::from_ref(&json),
+        _ => &[],
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let mut out = Vec::with_capacity(arr.len());
+    for c in arr {
+        let Some(mint) = c.get("mint").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let created_at_ms = c.get("created_timestamp").and_then(|x| x.as_i64());
+        let last_trade_at_ms = c.get("last_trade_timestamp").and_then(|x| x.as_i64());
+        let age_minutes = created_at_ms.map(|t| ((now_ms - t) / 60_000).max(0));
+        let virtual_sol = c.get("virtual_sol_reserves").and_then(|x| x.as_f64());
+        let virtual_tok = c.get("virtual_token_reserves").and_then(|x| x.as_f64());
+
+        // pump.fun graduates a coin once ~85 SOL has hit the bonding curve.
+        // Translate virtual reserves into a 0-100% completion estimate.
+        // Fallback to the explicit `complete` flag for migrated coins.
+        let bonding_curve_progress_pct = virtual_sol.map(|sol| {
+            // virtual_sol_reserves starts ~30 SOL and tops out ~115 SOL.
+            // 30..115 → 0..100, clamped.
+            let pct = ((sol - 30.0) / 85.0) * 100.0;
+            pct.clamp(0.0, 100.0)
+        });
+
+        out.push(TrenchCoin {
+            mint: mint.to_string(),
+            name: c.get("name").and_then(|x| x.as_str()).map(String::from),
+            symbol: c.get("symbol").and_then(|x| x.as_str()).map(String::from),
+            image_url: c.get("image_uri").and_then(|x| x.as_str()).map(String::from),
+            creator: c.get("creator").and_then(|x| x.as_str()).map(String::from),
+            created_at_ms,
+            age_minutes,
+            usd_market_cap: c
+                .get("usd_market_cap")
+                .and_then(|x| x.as_f64())
+                .filter(|v| *v > 0.0),
+            virtual_sol_reserves: virtual_sol,
+            virtual_token_reserves: virtual_tok,
+            bonding_curve_progress_pct,
+            complete: c.get("complete").and_then(|x| x.as_bool()),
+            raydium_pool: c
+                .get("raydium_pool")
+                .and_then(|x| x.as_str())
+                .map(String::from),
+            twitter: c.get("twitter").and_then(|x| x.as_str()).map(String::from),
+            telegram: c.get("telegram").and_then(|x| x.as_str()).map(String::from),
+            website: c.get("website").and_then(|x| x.as_str()).map(String::from),
+            reply_count: c.get("reply_count").and_then(|x| x.as_i64()),
+            last_trade_at_ms,
         });
     }
     Ok(out)

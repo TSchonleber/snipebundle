@@ -33,6 +33,37 @@ export interface CoBuyerSpec {
 
 // --- Config (mirrors crates/core/src/config.rs) ----------------------------
 
+/**
+ * GMGN-style trenches bucket. Sourced from pump.fun's frontend API; richer
+ * than TrendingItem because we want bonding-curve progress, holders, age etc.
+ */
+export interface TrenchCoin {
+  mint: string;
+  name: string | null;
+  symbol: string | null;
+  image_url: string | null;
+  creator: string | null;
+  created_at_ms: number | null;
+  age_minutes: number | null;
+  usd_market_cap: number | null;
+  virtual_sol_reserves: number | null;
+  virtual_token_reserves: number | null;
+  bonding_curve_progress_pct: number | null;
+  complete: boolean | null;
+  raydium_pool: string | null;
+  twitter: string | null;
+  telegram: string | null;
+  website: string | null;
+  reply_count: number | null;
+  last_trade_at_ms: number | null;
+}
+
+export interface TrenchBuckets {
+  new: TrenchCoin[];
+  almost: TrenchCoin[];
+  migrated: TrenchCoin[];
+}
+
 export interface ExitRule {
   take_profit_pct: number;
   stop_loss_pct: number;
@@ -204,6 +235,8 @@ export const ipc = {
   deleteWallet: (pubkey: string, passphrase: string) =>
     invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
   getTrending: () => invoke<TrendingItem[]>("get_trending"),
+  getPumpfunBuckets: () =>
+    invoke<TrenchBuckets>("get_pumpfun_buckets"),
   ensureEngineRunning: () => invoke<void>("ensure_engine_running"),
   registerLaunchPosition: (args: {
     mint: string;

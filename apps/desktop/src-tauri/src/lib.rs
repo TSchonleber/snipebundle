@@ -40,6 +40,7 @@ pub fn run() {
             commands::add_sniper_wallet,
             commands::delete_wallet,
             commands::get_trending,
+            commands::get_pumpfun_buckets,
             commands::ensure_engine_running,
             commands::register_launch_position,
             commands::close_launch_position,

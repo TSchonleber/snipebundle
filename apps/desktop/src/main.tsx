@@ -13,6 +13,7 @@ import { Launch } from "./pages/Launch";
 import { Wallets } from "./pages/Wallets";
 import { Trending } from "./pages/Trending";
 import { Chart } from "./pages/Chart";
+import { Trenches } from "./pages/Trenches";
 import "@snipebundle/ui/styles.css";
 import "./styles.css";
 
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
       { path: "mode", element: <ModeSelect /> },
       { path: "dashboard", element: <Dashboard /> },
       { path: "chart", element: <Chart /> },
+      { path: "trenches", element: <Trenches /> },
       { path: "trade", element: <Trade /> },
       { path: "launch", element: <Launch /> },
       { path: "wallets", element: <Wallets /> },
