@@ -1152,6 +1152,125 @@ pub struct RaydiumLaunchArgsWrapper {
     pub args: RaydiumLaunchArgs,
 }
 
+#[derive(Deserialize)]
+pub struct MultiRaydiumLaunchArgs {
+    pub launches: Vec<RaydiumLaunchArgs>,
+}
+
+#[derive(Serialize)]
+pub struct MultiRaydiumOutcome {
+    pub index: usize,
+    pub mint: Option<String>,
+    pub tx_signature: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Fire N Raydium-direct launches in parallel. Each one runs through
+/// the same execute_raydium_launch pipeline (mint + ATA + Metaplex
+/// metadata + mintTo all in one tx) on its own dev keypair. Returns
+/// one MultiRaydiumOutcome per input, in the same order. A single
+/// launch failing doesn't abort the rest.
+#[tauri::command]
+pub async fn launch_multiple_tokens_raydium(
+    args: MultiRaydiumLaunchArgs,
+    state: State<'_, AppState>,
+) -> Result<Vec<MultiRaydiumOutcome>> {
+    if args.launches.is_empty() {
+        return Err("at least one launch required".into());
+    }
+    if args.launches.len() > 10 {
+        return Err("multi-launch capped at 10 tokens per batch".into());
+    }
+
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+
+    // Pre-validate every input before spawning so a typo in one launch
+    // doesn't leave the user with a half-fired batch.
+    for (i, l) in args.launches.iter().enumerate() {
+        l.validate().map_err(|e| format!("launches[{i}]: {e}"))?;
+        if find_wallet(&ks, &l.dev_pubkey).is_none() {
+            return Err(format!(
+                "launches[{i}]: dev wallet {} not in keystore",
+                l.dev_pubkey
+            ));
+        }
+        for cb in &l.co_buyers {
+            if find_wallet(&ks, &cb.pubkey).is_none() {
+                return Err(format!(
+                    "launches[{i}]: co-buyer wallet {} not in keystore",
+                    cb.pubkey
+                ));
+            }
+        }
+    }
+
+    let mut handles = Vec::with_capacity(args.launches.len());
+    for (idx, launch_args) in args.launches.into_iter().enumerate() {
+        let cfg = cfg.clone();
+        let ks = ks.clone();
+        handles.push(tokio::spawn(async move {
+            let outcome = run_single_raydium_launch(launch_args, &cfg, &ks).await;
+            (idx, outcome)
+        }));
+    }
+
+    let mut results: Vec<MultiRaydiumOutcome> = Vec::with_capacity(handles.len());
+    for h in handles {
+        match h.await {
+            Ok((idx, Ok(res))) => results.push(MultiRaydiumOutcome {
+                index: idx,
+                mint: Some(res.mint),
+                tx_signature: Some(res.bundle_id),
+                error: None,
+            }),
+            Ok((idx, Err(e))) => results.push(MultiRaydiumOutcome {
+                index: idx,
+                mint: None,
+                tx_signature: None,
+                error: Some(e),
+            }),
+            Err(join_err) => results.push(MultiRaydiumOutcome {
+                index: usize::MAX,
+                mint: None,
+                tx_signature: None,
+                error: Some(format!("launch task panicked: {join_err}")),
+            }),
+        }
+    }
+    results.sort_by_key(|r| r.index);
+    Ok(results)
+}
+
+async fn run_single_raydium_launch(
+    args: RaydiumLaunchArgs,
+    cfg: &Config,
+    ks: &Keystore,
+) -> std::result::Result<RaydiumLaunchResult, String> {
+    let dev = find_wallet(ks, &args.dev_pubkey)
+        .ok_or_else(|| format!("dev wallet {} not in keystore", args.dev_pubkey))?;
+    let mut co_buyers: Vec<(StoredKeypair, f64)> =
+        Vec::with_capacity(args.co_buyers.len());
+    for cb in &args.co_buyers {
+        let kp = find_wallet(ks, &cb.pubkey)
+            .ok_or_else(|| format!("co-buyer wallet {} not in keystore", cb.pubkey))?;
+        co_buyers.push((kp, cb.sol));
+    }
+    raydium_launch::execute_raydium_launch(&args, &cfg.network, &dev, &co_buyers)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn launch_token_raydium(
     args: RaydiumLaunchArgsWrapper,

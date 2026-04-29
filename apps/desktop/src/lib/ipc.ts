@@ -231,6 +231,14 @@ export interface RaydiumLaunchResult {
   lp_burn_signature: string | null;
 }
 
+/** v0.1.59: per-token result of a launch_multiple_tokens_raydium batch. */
+export interface MultiRaydiumOutcome {
+  index: number;
+  mint: string | null;
+  tx_signature: string | null;
+  error: string | null;
+}
+
 /** v0.1.54: per-token result of a launch_multiple_tokens batch. */
 export interface MultiLaunchOutcome {
   index: number;
@@ -349,6 +357,10 @@ export const ipc = {
   launchTokenRaydium: (args: RaydiumLaunchArgs) =>
     invoke<RaydiumLaunchResult>("launch_token_raydium", {
       args: { args },
+    }),
+  launchMultipleTokensRaydium: (launches: RaydiumLaunchArgs[]) =>
+    invoke<MultiRaydiumOutcome[]>("launch_multiple_tokens_raydium", {
+      args: { launches },
     }),
   startVolumeSession: (config: VolumeBotConfig) =>
     invoke<string>("start_volume_session", { args: { config } }),

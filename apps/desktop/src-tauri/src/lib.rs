@@ -41,6 +41,7 @@ pub fn run() {
             commands::launch_token,
             commands::launch_multiple_tokens,
             commands::launch_token_raydium,
+            commands::launch_multiple_tokens_raydium,
             commands::start_volume_session,
             commands::stop_volume_session,
             commands::list_volume_sessions,

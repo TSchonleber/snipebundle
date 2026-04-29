@@ -6,9 +6,10 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc, type LaunchResult } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { MultiLaunchPanel } from "../components/MultiLaunchPanel";
+import { MultiRaydiumLaunchPanel } from "../components/MultiRaydiumLaunchPanel";
 import { RaydiumLaunchPanel } from "../components/RaydiumLaunchPanel";
 
-type LaunchMode = "single" | "multi" | "raydium";
+type LaunchMode = "single" | "multi" | "raydium" | "raydium-multi";
 
 type CoBuyerStrategy = "uniform" | "per_wallet" | "random";
 
@@ -289,20 +290,27 @@ export function Launch() {
           <span className="font-mono text-2xs text-fg-subtle">
             // dev creates token + opening buy in one jito bundle
           </span>
-          <div className="ml-auto flex items-center gap-1">
-            {(["single", "multi", "raydium"] as const).map((m) => (
+          <div className="ml-auto flex items-center gap-1 flex-wrap justify-end">
+            {(
+              [
+                ["single", "single"],
+                ["multi", "multi"],
+                ["raydium", "raydium"],
+                ["raydium-multi", "raydium multi"],
+              ] as const
+            ).map(([key, label]) => (
               <button
-                key={m}
+                key={key}
                 type="button"
-                onClick={() => setMode(m)}
+                onClick={() => setMode(key)}
                 className={cn(
                   "px-3 py-1 rounded-md font-mono text-2xs border transition-colors",
-                  mode === m
+                  mode === key
                     ? "border-accent text-accent bg-accent/5"
                     : "border-border text-fg-subtle hover:text-fg-muted",
                 )}
               >
-                {m}
+                {label}
               </button>
             ))}
           </div>
@@ -316,6 +324,8 @@ export function Launch() {
           />
         ) : mode === "raydium" ? (
           <RaydiumLaunchPanel devWallets={devWallets} snipers={snipers} />
+        ) : mode === "raydium-multi" ? (
+          <MultiRaydiumLaunchPanel devWallets={devWallets} snipers={snipers} />
         ) : (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
