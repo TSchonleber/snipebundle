@@ -62,6 +62,10 @@ export function PumpfunChart({ mint, height }: Props) {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // Tracks whether we've already called fitContent for the current mint.
+  // After the initial fit we want subsequent live updates to stay glued
+  // to the right edge, not re-stretch every time a new candle lands.
+  const hasFittedRef = useRef(false);
 
   const [coin, setCoin] = useState<TrenchCoin | null>(null);
   const [trades, setTrades] = useState<PumpTrade[]>([]);
@@ -80,6 +84,8 @@ export function PumpfunChart({ mint, height }: Props) {
   useEffect(() => {
     if (!mint) return;
     let cancelled = false;
+    // New mint → re-arm the auto-fit so the next data load fits to view.
+    hasFittedRef.current = false;
     ipc
       .getPumpfunChart(mint)
       .then((data: PumpChartData) => {
@@ -176,12 +182,12 @@ export function PumpfunChart({ mint, height }: Props) {
         timeVisible: true,
         secondsVisible: true,
         borderColor: "#1c1d24",
-        // Keep candles at a fixed visual width so a chart with 8 trades
-        // doesn't blow up to 1/8-of-the-screen-wide bars. Lightweight-
-        // charts will scroll horizontally instead — same UX as GMGN.
-        barSpacing: 8,
-        minBarSpacing: 2,
-        rightOffset: 6,
+        // Default candles are wide enough to read at a glance; user can
+        // wheel-zoom in/out from there. Bigger than the 8px we shipped in
+        // 0.1.37 — that left tiny matchsticks bunched at the right edge.
+        barSpacing: 14,
+        minBarSpacing: 1,
+        rightOffset: 8,
       },
       rightPriceScale: {
         borderColor: "#1c1d24",
@@ -190,6 +196,22 @@ export function PumpfunChart({ mint, height }: Props) {
       crosshair: {
         vertLine: { color: "#2a2c36" },
         horzLine: { color: "#2a2c36" },
+      },
+      // Wheel-zoom on the chart body, click-drag pan, pinch on trackpad —
+      // all enabled by default in lightweight-charts but spell it out so
+      // we don't accidentally turn one off later. axisDoubleClickReset
+      // gives the user a quick way back to the auto-fit view.
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+        mouseWheel: true,
+        pinch: true,
       },
     });
 
@@ -263,11 +285,16 @@ export function PumpfunChart({ mint, height }: Props) {
             : "rgba(239, 111, 125, 0.4)",
       })),
     );
-    // Don't fitContent — that re-stretches all candles to fill the
-    // viewport and produces the giant-bars effect on sparse data. Scroll
-    // to the right edge so live trades stay visible at the configured
-    // bar width instead.
-    chartRef.current?.timeScale().scrollToRealTime();
+    // Stay pinned to the right edge for live updates. Auto-fit the very
+    // first time data arrives so the user sees the whole history at once
+    // without needing to wheel-zoom out manually.
+    const timeScale = chartRef.current?.timeScale();
+    if (!hasFittedRef.current && candles.length > 1) {
+      timeScale?.fitContent();
+      hasFittedRef.current = true;
+    } else {
+      timeScale?.scrollToRealTime();
+    }
   }, [candles]);
 
   // Stat strip at the top
@@ -349,6 +376,14 @@ export function PumpfunChart({ mint, height }: Props) {
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={() => chartRef.current?.timeScale().fitContent()}
+            className="font-mono text-2xs px-2 py-0.5 border border-border text-fg-subtle hover:text-fg-muted hover:border-fg-subtle transition-colors"
+            title="fit all candles to view (or just double-click the time axis)"
+          >
+            fit
+          </button>
           <StreamPulse on={streaming} />
         </div>
       </div>

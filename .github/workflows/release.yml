@@ -139,6 +139,23 @@ jobs:
       - name: list collected
         run: ls -la _all_artifacts || true
 
+      - name: create stable-named aliases
+        # The website's download buttons hard-code unversioned filenames
+        # (snipebundle-setup.msi, snipebundle.dmg, snipebundle.AppImage)
+        # so /releases/latest/download/<name> always resolves regardless
+        # of the version tag. Tauri only outputs version-stamped names —
+        # copy each to its stable alias here. Originals stay too, for
+        # users who want to pin a specific version.
+        run: |
+          set -euo pipefail
+          cd _all_artifacts
+          for src in *.msi; do [ -f "$src" ] && cp "$src" snipebundle-setup.msi && break; done
+          for src in *-setup.exe; do [ -f "$src" ] && cp "$src" snipebundle-setup.exe && break; done
+          for src in *.dmg; do [ -f "$src" ] && cp "$src" snipebundle.dmg && break; done
+          for src in *.AppImage; do [ -f "$src" ] && cp "$src" snipebundle.AppImage && break; done
+          for src in *.deb; do [ -f "$src" ] && cp "$src" snipebundle.deb && break; done
+          ls -la
+
       - name: publish release to public repo
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_PAT }}
