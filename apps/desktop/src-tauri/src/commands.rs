@@ -827,6 +827,160 @@ pub async fn launch_token(
 }
 
 #[derive(Deserialize)]
+pub struct MultiLaunchArgs {
+    pub launches: Vec<LaunchArgs>,
+}
+
+#[derive(Serialize)]
+pub struct MultiLaunchOutcome {
+    pub index: usize,
+    pub mint: Option<String>,
+    pub bundle_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Fire N pump.fun launches in parallel. Each launch follows the same
+/// pipeline as `launch_token` (metadata upload → execute_launch → spawn
+/// per-wallet exit watchers) but they share zero ordering — every token
+/// races to its own create+initial-buy bundle on its own dev keypair.
+///
+/// Returns one MultiLaunchOutcome per input, in the same order. A single
+/// launch failing doesn't abort the rest; the user gets per-token
+/// success/failure so they know exactly which tokens went live and which
+/// they need to retry. Caller is responsible for showing the outcomes.
+#[tauri::command]
+pub async fn launch_multiple_tokens(
+    args: MultiLaunchArgs,
+    state: State<'_, AppState>,
+) -> Result<Vec<MultiLaunchOutcome>> {
+    if args.launches.is_empty() {
+        return Err("at least one launch required".into());
+    }
+    if args.launches.len() > 10 {
+        return Err("multi-launch capped at 10 tokens per batch".into());
+    }
+
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+
+    // Pre-validate everything we can resolve from the keystore before
+    // spawning, so a typo in any single launch fails the batch fast
+    // instead of half-firing and leaving the user with a partial state.
+    for (i, l) in args.launches.iter().enumerate() {
+        if l.dev_buy_sol < 0.0 {
+            return Err(format!("launches[{i}]: dev_buy_sol must be non-negative"));
+        }
+        if find_wallet(&ks, &l.dev_pubkey).is_none() {
+            return Err(format!(
+                "launches[{i}]: dev wallet {} not in keystore",
+                l.dev_pubkey
+            ));
+        }
+        for cb in &l.co_buyers {
+            if find_wallet(&ks, &cb.pubkey).is_none() {
+                return Err(format!(
+                    "launches[{i}]: co-buyer wallet {} not in keystore",
+                    cb.pubkey
+                ));
+            }
+        }
+    }
+
+    let mut handles = Vec::with_capacity(args.launches.len());
+    for (idx, launch_args) in args.launches.into_iter().enumerate() {
+        let cfg = cfg.clone();
+        let ks = ks.clone();
+        handles.push(tokio::spawn(async move {
+            let outcome = run_single_launch(launch_args, &cfg, &ks).await;
+            (idx, outcome)
+        }));
+    }
+
+    let mut results: Vec<MultiLaunchOutcome> = Vec::with_capacity(handles.len());
+    for h in handles {
+        match h.await {
+            Ok((idx, Ok(res))) => results.push(MultiLaunchOutcome {
+                index: idx,
+                mint: Some(res.mint),
+                bundle_id: Some(res.bundle_id),
+                error: None,
+            }),
+            Ok((idx, Err(e))) => results.push(MultiLaunchOutcome {
+                index: idx,
+                mint: None,
+                bundle_id: None,
+                error: Some(e),
+            }),
+            Err(join_err) => results.push(MultiLaunchOutcome {
+                index: usize::MAX,
+                mint: None,
+                bundle_id: None,
+                error: Some(format!("launch task panicked: {join_err}")),
+            }),
+        }
+    }
+    results.sort_by_key(|r| r.index);
+    Ok(results)
+}
+
+async fn run_single_launch(
+    args: LaunchArgs,
+    cfg: &Config,
+    ks: &Keystore,
+) -> std::result::Result<LaunchResult, String> {
+    let dev = find_wallet(ks, &args.dev_pubkey).ok_or_else(|| {
+        format!("dev wallet {} not in keystore", args.dev_pubkey)
+    })?;
+
+    let metadata_uri = if let Some(u) = args.metadata_uri.clone() {
+        u
+    } else {
+        let img = args.image_path.as_ref().map(PathBuf::from);
+        launch::upload_metadata(&args.metadata, img.as_deref())
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    let mut co_buyers: Vec<(StoredKeypair, f64)> =
+        Vec::with_capacity(args.co_buyers.len());
+    for cb in &args.co_buyers {
+        let kp = find_wallet(ks, &cb.pubkey)
+            .ok_or_else(|| format!("co-buyer wallet {} not in keystore", cb.pubkey))?;
+        co_buyers.push((kp, cb.sol));
+    }
+
+    let result = launch::execute_launch(
+        &dev,
+        &args.metadata,
+        &metadata_uri,
+        args.dev_buy_sol,
+        &co_buyers,
+        &cfg.network,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut exit_wallets = Vec::new();
+    if args.dev_buy_sol > 0.0 {
+        exit_wallets.push(dev);
+    }
+    exit_wallets.extend(co_buyers.iter().map(|(wallet, _)| wallet.clone()));
+    spawn_universal_wallet_exits(exit_wallets, result.mint.clone(), cfg.clone(), ks.clone());
+
+    Ok(result)
+}
+
+#[derive(Deserialize)]
 pub struct FanOutArgs {
     pub recipients: Vec<String>,
     pub sol_per_wallet: f64,

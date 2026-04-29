@@ -202,6 +202,14 @@ export interface LaunchResult {
   co_buyer_total_sol: number;
 }
 
+/** v0.1.54: per-token result of a launch_multiple_tokens batch. */
+export interface MultiLaunchOutcome {
+  index: number;
+  mint: string | null;
+  bundle_id: string | null;
+  error: string | null;
+}
+
 export interface ImportDevArgs {
   label: string;
   secret_b58: string;
@@ -255,6 +263,10 @@ export const ipc = {
     }),
   launchToken: (args: LaunchArgs) =>
     invoke<LaunchResult>("launch_token", { args }),
+  launchMultipleTokens: (launches: LaunchArgs[]) =>
+    invoke<MultiLaunchOutcome[]>("launch_multiple_tokens", {
+      args: { launches },
+    }),
   getBalances: (pubkeys: string[]) =>
     invoke<Record<string, number>>("get_balances", { pubkeys }),
   fanOutFromMaster: (recipients: string[], solPerWallet: number) =>

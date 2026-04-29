@@ -36,6 +36,7 @@ pub fn run() {
             commands::import_dev_wallet,
             commands::create_dev_wallet,
             commands::launch_token,
+            commands::launch_multiple_tokens,
             commands::get_balances,
             commands::fan_out_from_master,
             commands::fan_out_from_master_per_wallet,

@@ -5,6 +5,9 @@ import type { WalletInfo } from "@snipebundle/ui";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc, type LaunchResult } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { MultiLaunchPanel } from "../components/MultiLaunchPanel";
+
+type LaunchMode = "single" | "multi";
 
 type CoBuyerStrategy = "uniform" | "per_wallet" | "random";
 
@@ -16,6 +19,7 @@ interface LaunchSellTarget {
 
 export function Launch() {
   const [params] = useSearchParams();
+  const [mode, setMode] = useState<LaunchMode>("single");
   const [devWallets, setDevWallets] = useState<WalletInfo[]>([]);
   const [snipers, setSnipers] = useState<WalletInfo[]>([]);
   const [selectedDev, setSelectedDev] = useState<string>("");
@@ -284,8 +288,32 @@ export function Launch() {
           <span className="font-mono text-2xs text-fg-subtle">
             // dev creates token + opening buy in one jito bundle
           </span>
+          <div className="ml-auto flex items-center gap-1">
+            {(["single", "multi"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cn(
+                  "px-3 py-1 rounded-md font-mono text-2xs border transition-colors",
+                  mode === m
+                    ? "border-accent text-accent bg-accent/5"
+                    : "border-border text-fg-subtle hover:text-fg-muted",
+                )}
+              >
+                {m === "single" ? "single" : "multi"}
+              </button>
+            ))}
+          </div>
         </div>
 
+        {mode === "multi" ? (
+          <MultiLaunchPanel
+            devWallets={devWallets}
+            snipers={snipers}
+            onComplete={() => refresh().catch(() => {})}
+          />
+        ) : (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
             <Card>
@@ -678,6 +706,7 @@ export function Launch() {
             </Card>
           </aside>
         </div>
+        )}
 
         {showImport && (
           <ImportDevModal
