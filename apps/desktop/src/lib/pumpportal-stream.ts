@@ -169,13 +169,40 @@ export const streamCounters = {
   lastUnknown: null as null | { snippet: string; at: number },
 };
 
+// Sliding 60s window of timestamps — enables "events / min" displays so we
+// can see live throughput in the UI.
+const RATE_WINDOW_MS = 60_000;
+const rateTimestamps: number[] = [];
+
+// Last 8 raw messages — peeked into via the diagnostic strip's expand button.
+const RAW_BUFFER_CAP = 8;
+export const recentRaw: { kind: string; snippet: string; at: number }[] = [];
+
 function bumpCounter(kind: keyof typeof streamCounters | "unknown") {
   streamCounters.total++;
   if (kind === "new_token") streamCounters.new_token++;
   else if (kind === "migration") streamCounters.migration++;
   else if (kind === "token_trade") streamCounters.token_trade++;
   else streamCounters.unknown++;
+  const now = Date.now();
+  rateTimestamps.push(now);
+  // Drop entries older than the window.
+  while (
+    rateTimestamps.length > 0 &&
+    rateTimestamps[0] < now - RATE_WINDOW_MS
+  ) {
+    rateTimestamps.shift();
+  }
   for (const cb of counterListeners) cb();
+}
+
+export function eventsPerMinute(): number {
+  return rateTimestamps.length;
+}
+
+function recordRaw(kind: string, snippet: string) {
+  recentRaw.unshift({ kind, snippet, at: Date.now() });
+  if (recentRaw.length > RAW_BUFFER_CAP) recentRaw.length = RAW_BUFFER_CAP;
 }
 
 const counterListeners = new Set<() => void>();
@@ -232,6 +259,7 @@ function handleMessage(raw: any) {
       raw: msg,
     };
     bumpCounter("new_token");
+    recordRaw("new_token", JSON.stringify(msg).slice(0, 220));
     fanout(ev);
     return;
   }
@@ -251,6 +279,7 @@ function handleMessage(raw: any) {
       raw: msg,
     };
     bumpCounter("token_trade");
+    recordRaw("token_trade", JSON.stringify(msg).slice(0, 220));
     fanout(ev);
     return;
   }
@@ -274,16 +303,16 @@ function handleMessage(raw: any) {
       raw: msg,
     };
     bumpCounter("migration");
+    recordRaw("migration", JSON.stringify(msg).slice(0, 220));
     fanout(ev);
     return;
   }
 
   // Unknown shape. Keep a small breadcrumb for debugging without spamming.
   bumpCounter("unknown");
-  streamCounters.lastUnknown = {
-    snippet: JSON.stringify(msg).slice(0, 200),
-    at: now,
-  };
+  const snippet = JSON.stringify(msg).slice(0, 200);
+  streamCounters.lastUnknown = { snippet, at: now };
+  recordRaw("unknown", snippet);
 }
 
 function optString(v: any): string | undefined {

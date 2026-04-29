@@ -11,10 +11,12 @@ import {
   subscribeActiveWallet,
 } from "../lib/active-wallet";
 import {
+  eventsPerMinute,
   isConnected as streamIsConnected,
   onConnectivityChange,
   onCountersChange,
   onStreamEvent,
+  recentRaw,
   streamCounters,
   subscribeMigration,
   subscribeNewToken,
@@ -22,11 +24,15 @@ import {
   type MigrationEvent,
 } from "../lib/pumpportal-stream";
 
-// REST is the seed + safety net (catches anything missed by the WS, refills
-// metadata for migrated coins). The realtime stream lives on top of it.
-const POLL_MS = 30_000;
-const NEW_BUCKET_CAP = 40;
-const MIGRATED_BUCKET_CAP = 40;
+// REST seed + safety net. We dropped this from 30s→4s in v0.1.35 because
+// the WS alone can miss bursts when pump.fun's rate spikes — the cheap
+// frontend-api-v3 poll catches anything the WS dropped. Net result: feed
+// stays full even when the firehose is hot.
+const POLL_MS = 4_000;
+// Larger caps so the eye sees more activity at a glance. ~150 rows fit
+// comfortably in a tall column with virtualization deferred to a later pass.
+const NEW_BUCKET_CAP = 120;
+const MIGRATED_BUCKET_CAP = 120;
 
 interface Filters {
   ageMin: string; // minutes
@@ -116,6 +122,8 @@ export function Trenches() {
   const [counterTick, setCounterTick] = useState(0);
   useEffect(() => onCountersChange(() => setCounterTick((x) => x + 1)), []);
   void counterTick;
+  const [peekOpen, setPeekOpen] = useState(false);
+  const epm = eventsPerMinute();
 
   useEffect(() => {
     const unsub = subscribeActiveWallet(() =>
@@ -346,8 +354,16 @@ export function Trenches() {
               // pump.fun · ws stream + {POLL_MS / 1000}s rest seed
             </span>
           </div>
-          <div className="flex items-center gap-3 font-mono text-2xs text-fg-subtle">
-            <span title="ws stream parser counters since page load">
+          <div className="flex items-center gap-3 font-mono text-2xs text-fg-subtle relative">
+            <button
+              type="button"
+              onClick={() => setPeekOpen((s) => !s)}
+              title="ws stream parser counters since page load — click to inspect last raw events"
+              className={cn(
+                "transition-colors",
+                peekOpen ? "text-fg" : "hover:text-fg-muted",
+              )}
+            >
               new <span className="text-accent">{streamCounters.new_token}</span>
               {" · "}
               mig <span className="text-warn">{streamCounters.migration}</span>
@@ -356,18 +372,72 @@ export function Trenches() {
               {streamCounters.unknown > 0 && (
                 <>
                   {" · "}
-                  <span className="text-danger" title={streamCounters.lastUnknown?.snippet}>
+                  <span className="text-danger">
                     unk {streamCounters.unknown}
                   </span>
                 </>
               )}
-            </span>
+              {" · "}
+              <span className="text-fg-muted">{epm}/min</span>
+            </button>
             <LivePulse on={streamConnected} />
             {updatedAt && (
               <span>
                 seed {Math.max(0, Math.floor((Date.now() - updatedAt) / 1000))}
                 s ago
               </span>
+            )}
+
+            {peekOpen && (
+              <div className="absolute right-0 top-full mt-1 z-30 w-[520px] border border-border bg-bg shadow-xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-2xs text-fg-subtle">
+                    // last raw stream messages
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPeekOpen(false)}
+                    className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+                  >
+                    close
+                  </button>
+                </div>
+                {recentRaw.length === 0 ? (
+                  <div className="font-mono text-2xs text-fg-subtle">
+                    no events yet — ws may still be connecting
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+                    {recentRaw.map((r, i) => (
+                      <div
+                        key={i}
+                        className="font-mono text-2xs leading-relaxed"
+                      >
+                        <span
+                          className={cn(
+                            "inline-block w-20",
+                            r.kind === "new_token"
+                              ? "text-accent"
+                              : r.kind === "migration"
+                                ? "text-warn"
+                                : r.kind === "token_trade"
+                                  ? "text-fg"
+                                  : "text-danger",
+                          )}
+                        >
+                          {r.kind}
+                        </span>
+                        <span className="text-fg-subtle">
+                          {Math.floor((Date.now() - r.at) / 1000)}s ago
+                        </span>
+                        <div className="text-fg-muted break-all mt-0.5">
+                          {r.snippet}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
