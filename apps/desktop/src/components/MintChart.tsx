@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { cn } from "@snipebundle/ui";
+import { ipc } from "../lib/ipc";
+import { PumpfunChart } from "./PumpfunChart";
 
 const dexscreenerEmbed = (mint: string) =>
   `https://dexscreener.com/solana/${mint}?embed=1&theme=dark&info=0&trades=0`;
@@ -30,6 +33,41 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
   const editable = !!onMintChange;
   const trimmed = mint.trim();
   const valid = isValidMint(trimmed);
+
+  // Probe pump.fun for the coin's migration status. Pre-migration tokens
+  // have no DexScreener pair so the iframe stays on "Loading pair…" forever
+  // — we render a custom SVG chart from pump.fun trade data for those.
+  // Post-graduation we fall through to DexScreener.
+  // null = unknown (loading), true = render pump chart, false = dexscreener.
+  const [usePumpChart, setUsePumpChart] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!valid) {
+      setUsePumpChart(null);
+      return;
+    }
+    let cancelled = false;
+    setUsePumpChart(null);
+    ipc
+      .getPumpfunChart(trimmed)
+      .then((data) => {
+        if (cancelled) return;
+        // is_pre_migration is true for any pump.fun coin still on the
+        // bonding curve. If pump.fun didn't recognize this mint at all
+        // (no coin metadata returned) but it's a valid base58 address,
+        // assume it's a non-pump-fun token and use DexScreener.
+        if (!data.coin) {
+          setUsePumpChart(false);
+        } else {
+          setUsePumpChart(data.is_pre_migration);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setUsePumpChart(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trimmed, valid]);
 
   return (
     <div
@@ -102,7 +140,21 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
         style={fill ? undefined : { height: resolvedHeight }}
         className={cn("relative", fill && "flex-1 min-h-0")}
       >
-        {valid ? (
+        {!valid ? (
+          <div className="hatch absolute inset-0 flex items-center justify-center font-mono text-2xs text-fg-subtle">
+            paste a pump.fun mint to load the chart
+          </div>
+        ) : usePumpChart === null ? (
+          <div className="absolute inset-0 flex items-center justify-center font-mono text-2xs text-fg-subtle">
+            resolving pair…
+          </div>
+        ) : usePumpChart ? (
+          // Pre-migration pump.fun coin — DexScreener has no pair yet.
+          // Render our own SVG chart from pump.fun's trades feed.
+          <div className="absolute inset-0">
+            <PumpfunChart mint={trimmed} height={resolvedHeight} />
+          </div>
+        ) : (
           <iframe
             // Re-mount on mint change so the iframe doesn't carry stale
             // state (and so going from invalid→valid actually loads).
@@ -115,10 +167,6 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
             sandbox="allow-scripts allow-same-origin allow-popups"
             loading="lazy"
           />
-        ) : (
-          <div className="hatch absolute inset-0 flex items-center justify-center font-mono text-2xs text-fg-subtle">
-            paste a pump.fun mint to load the chart
-          </div>
         )}
       </div>
     </div>

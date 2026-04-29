@@ -29,9 +29,13 @@ const GECKOTERMINAL_TRENDING: &str =
 const PUMPFUN_FOR_YOU: &str =
     "https://frontend-api-v3.pump.fun/coins/for-you?offset=0&limit=40&includeNsfw=false";
 const PUMPFUN_NEW: &str =
-    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false";
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=40&sort=created_timestamp&order=DESC&includeNsfw=false";
+// "Almost migrated" = curve >70% but not yet complete. The
+// king-of-the-hill endpoint only returns the current single "king" — for a
+// real column we fetch the most-active uncompleted list and filter
+// client-side in fetch_pumpfun_buckets.
 const PUMPFUN_ALMOST: &str =
-    "https://frontend-api-v3.pump.fun/coins/king-of-the-hill?includeNsfw=false&offset=0&limit=30";
+    "https://frontend-api-v3.pump.fun/coins?offset=0&limit=80&sort=last_trade_timestamp&order=DESC&includeNsfw=false";
 const PUMPFUN_MIGRATED: &str =
     "https://frontend-api-v3.pump.fun/coins/currently-live?offset=0&limit=30&includeNsfw=false";
 
@@ -692,9 +696,26 @@ pub async fn fetch_pumpfun_buckets() -> TrenchBuckets {
         fetch_pumpfun_endpoint(PUMPFUN_ALMOST),
         fetch_pumpfun_endpoint(PUMPFUN_MIGRATED),
     );
+    // Filter the "almost" candidates: bonding curve > 70% AND not yet
+    // graduated. Sort by progress descending so the closest-to-migration
+    // shows first. We pulled the most-active 80 coins; usually 8-15 land
+    // in this bracket at any moment.
+    let mut almost = a.unwrap_or_default();
+    almost.retain(|c| {
+        let progress = c.bonding_curve_progress_pct.unwrap_or(0.0);
+        let migrated = c.complete.unwrap_or(false);
+        progress >= 70.0 && !migrated
+    });
+    almost.sort_by(|a, b| {
+        b.bonding_curve_progress_pct
+            .unwrap_or(0.0)
+            .partial_cmp(&a.bonding_curve_progress_pct.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     TrenchBuckets {
         new: n.unwrap_or_default(),
-        almost: a.unwrap_or_default(),
+        almost,
         migrated: m.unwrap_or_default(),
     }
 }
@@ -785,4 +806,174 @@ async fn fetch_pumpfun_endpoint(url: &str) -> Result<Vec<TrenchCoin>> {
         });
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Pump.fun chart data: trade history + coin status. DexScreener can't render
+// pre-migration tokens (no paid pair yet), so we draw our own line chart
+// from pump.fun's trade firehose for unmigrated coins.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PumpTrade {
+    pub timestamp_ms: i64,
+    pub is_buy: bool,
+    pub sol_amount: f64,
+    pub token_amount: f64,
+    /// SOL per token at the time of the trade — UI plots this as price.
+    pub price_sol: f64,
+    pub usd_market_cap: Option<f64>,
+    pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PumpChartData {
+    pub mint: String,
+    pub coin: Option<TrenchCoin>,
+    pub trades: Vec<PumpTrade>,
+    /// Convenience flag: when true the bonding curve is still live and the
+    /// frontend should render its own line chart; when false (graduated)
+    /// we hand off to DexScreener.
+    pub is_pre_migration: bool,
+}
+
+pub async fn fetch_pumpfun_chart(mint: &str) -> Result<PumpChartData> {
+    let client = reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("pumpchart client build")?;
+
+    // Coin metadata first — gives us name/symbol/curve state. If pump.fun
+    // doesn't know this mint we still attempt the trades fetch (some non-
+    // pump.fun mints have trade history through the same endpoint shape).
+    let coin = fetch_pumpfun_coin(&client, mint).await.ok();
+    let is_pre_migration = coin
+        .as_ref()
+        .and_then(|c| c.complete)
+        .map(|complete| !complete)
+        .unwrap_or(true);
+
+    let trades_url = format!(
+        "https://frontend-api-v3.pump.fun/trades/all/{}?limit=200&offset=0&minimumSize=0",
+        mint
+    );
+    let resp = client
+        .get(&trades_url)
+        .header("accept", "application/json")
+        .header("origin", "https://pump.fun")
+        .header("referer", "https://pump.fun/")
+        .send()
+        .await
+        .context("pumpchart trades fetch")?;
+    let trades = if resp.status().is_success() {
+        let json: serde_json::Value = resp.json().await.context("trades parse")?;
+        let arr = match &json {
+            serde_json::Value::Array(a) => a.as_slice(),
+            _ => &[],
+        };
+        let mut out = Vec::with_capacity(arr.len());
+        for t in arr {
+            let sol_amount =
+                t.get("sol_amount").and_then(|x| x.as_f64()).unwrap_or(0.0)
+                    / 1_000_000_000.0;
+            let token_amount =
+                t.get("token_amount").and_then(|x| x.as_f64()).unwrap_or(0.0)
+                    / 1_000_000.0;
+            let price_sol = if token_amount > 0.0 {
+                sol_amount / token_amount
+            } else {
+                0.0
+            };
+            let timestamp_ms = t
+                .get("timestamp")
+                .and_then(|x| x.as_i64())
+                .map(|s| s * 1000) // pump.fun returns seconds
+                .unwrap_or(0);
+            out.push(PumpTrade {
+                timestamp_ms,
+                is_buy: t.get("is_buy").and_then(|x| x.as_bool()).unwrap_or(true),
+                sol_amount,
+                token_amount,
+                price_sol,
+                usd_market_cap: t
+                    .get("usd_market_cap")
+                    .and_then(|x| x.as_f64()),
+                user: t.get("user").and_then(|x| x.as_str()).map(String::from),
+            });
+        }
+        // Newest first → reverse so chart x-axis flows oldest → newest.
+        out.reverse();
+        out
+    } else {
+        Vec::new()
+    };
+
+    Ok(PumpChartData {
+        mint: mint.to_string(),
+        coin,
+        trades,
+        is_pre_migration,
+    })
+}
+
+async fn fetch_pumpfun_coin(client: &reqwest::Client, mint: &str) -> Result<TrenchCoin> {
+    let url = format!("https://frontend-api-v3.pump.fun/coins/{}", mint);
+    let resp = client
+        .get(&url)
+        .header("accept", "application/json")
+        .header("origin", "https://pump.fun")
+        .header("referer", "https://pump.fun/")
+        .send()
+        .await
+        .context("pumpcoin fetch")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("pumpcoin status {}", resp.status());
+    }
+    let c: serde_json::Value = resp.json().await.context("pumpcoin parse")?;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let created_at_ms = c.get("created_timestamp").and_then(|x| x.as_i64());
+    let age_minutes = created_at_ms.map(|t| ((now_ms - t) / 60_000).max(0));
+    let virtual_sol = c.get("virtual_sol_reserves").and_then(|x| x.as_f64());
+    let bonding_curve_progress_pct = virtual_sol.map(|sol| {
+        let pct = ((sol - 30.0) / 85.0) * 100.0;
+        pct.clamp(0.0, 100.0)
+    });
+
+    Ok(TrenchCoin {
+        mint: mint.to_string(),
+        name: c.get("name").and_then(|x| x.as_str()).map(String::from),
+        symbol: c.get("symbol").and_then(|x| x.as_str()).map(String::from),
+        image_url: c.get("image_uri").and_then(|x| x.as_str()).map(String::from),
+        creator: c.get("creator").and_then(|x| x.as_str()).map(String::from),
+        created_at_ms,
+        age_minutes,
+        usd_market_cap: c
+            .get("usd_market_cap")
+            .and_then(|x| x.as_f64())
+            .filter(|v| *v > 0.0),
+        virtual_sol_reserves: virtual_sol,
+        virtual_token_reserves: c
+            .get("virtual_token_reserves")
+            .and_then(|x| x.as_f64()),
+        bonding_curve_progress_pct,
+        complete: c.get("complete").and_then(|x| x.as_bool()),
+        is_currently_live: c
+            .get("is_currently_live")
+            .and_then(|x| x.as_bool())
+            .or_else(|| c.get("currently_live").and_then(|x| x.as_bool())),
+        raydium_pool: c.get("raydium_pool").and_then(|x| x.as_str()).map(String::from),
+        twitter: c.get("twitter").and_then(|x| x.as_str()).map(String::from),
+        telegram: c.get("telegram").and_then(|x| x.as_str()).map(String::from),
+        website: c.get("website").and_then(|x| x.as_str()).map(String::from),
+        reply_count: c.get("reply_count").and_then(|x| x.as_i64()),
+        last_trade_at_ms: c.get("last_trade_timestamp").and_then(|x| x.as_i64()),
+    })
 }

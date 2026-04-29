@@ -65,6 +65,26 @@ export interface TrenchBuckets {
   migrated: TrenchCoin[];
 }
 
+export interface PumpTrade {
+  timestamp_ms: number;
+  is_buy: boolean;
+  sol_amount: number;
+  token_amount: number;
+  /** SOL per token at trade time. */
+  price_sol: number;
+  usd_market_cap: number | null;
+  user: string | null;
+}
+
+export interface PumpChartData {
+  mint: string;
+  coin: TrenchCoin | null;
+  trades: PumpTrade[];
+  /** True until the bonding curve graduates to Raydium. UI uses this to
+   *  decide between custom SVG chart (true) and DexScreener iframe (false). */
+  is_pre_migration: boolean;
+}
+
 export interface ExitRule {
   take_profit_pct: number;
   stop_loss_pct: number;
@@ -238,6 +258,8 @@ export const ipc = {
   getTrending: () => invoke<TrendingItem[]>("get_trending"),
   getPumpfunBuckets: () =>
     invoke<TrenchBuckets>("get_pumpfun_buckets"),
+  getPumpfunChart: (mint: string) =>
+    invoke<PumpChartData>("get_pumpfun_chart", { mint }),
   ensureEngineRunning: () => invoke<void>("ensure_engine_running"),
   registerLaunchPosition: (args: {
     mint: string;

@@ -393,6 +393,15 @@ pub async fn get_pumpfun_buckets()
     Ok(snipebundle_core::trending::fetch_pumpfun_buckets().await)
 }
 
+#[tauri::command]
+pub async fn get_pumpfun_chart(
+    mint: String,
+) -> Result<snipebundle_core::trending::PumpChartData> {
+    snipebundle_core::trending::fetch_pumpfun_chart(&mint)
+        .await
+        .map_err(err)
+}
+
 #[derive(Deserialize)]
 pub struct ManualBuyArgs {
     pub mint: String,

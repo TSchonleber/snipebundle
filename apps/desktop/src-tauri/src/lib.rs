@@ -41,6 +41,7 @@ pub fn run() {
             commands::delete_wallet,
             commands::get_trending,
             commands::get_pumpfun_buckets,
+            commands::get_pumpfun_chart,
             commands::ensure_engine_running,
             commands::register_launch_position,
             commands::close_launch_position,

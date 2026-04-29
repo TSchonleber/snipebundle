@@ -18,7 +18,13 @@ interface Filters {
   ageMax: string;
   mcMin: string; // USD
   mcMax: string;
+  curveMin: string; // bonding curve %
+  curveMax: string;
+  repliesMin: string;
   liveOnly: boolean;
+  hasTwitter: boolean;
+  hasTelegram: boolean;
+  hasWebsite: boolean;
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -26,8 +32,27 @@ const DEFAULT_FILTERS: Filters = {
   ageMax: "",
   mcMin: "",
   mcMax: "",
+  curveMin: "",
+  curveMax: "",
+  repliesMin: "",
   liveOnly: false,
+  hasTwitter: false,
+  hasTelegram: false,
+  hasWebsite: false,
 };
+
+function activeFilterCount(f: Filters): number {
+  let n = 0;
+  if (f.ageMin || f.ageMax) n++;
+  if (f.mcMin || f.mcMax) n++;
+  if (f.curveMin || f.curveMax) n++;
+  if (f.repliesMin) n++;
+  if (f.liveOnly) n++;
+  if (f.hasTwitter) n++;
+  if (f.hasTelegram) n++;
+  if (f.hasWebsite) n++;
+  return n;
+}
 
 export function Trenches() {
   const [buckets, setBuckets] = useState<TrenchBuckets>({
@@ -431,31 +456,137 @@ function FilterBar({
   quickBuy: number;
   onQuickBuy: (v: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const count = activeFilterCount(filters);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
   return (
-    <div className="flex items-center gap-3 flex-wrap mb-3 border border-border bg-bg-subtle/30 px-3 py-2">
-      <RangeFilter
-        label="age (m)"
-        min={filters.ageMin}
-        max={filters.ageMax}
-        onMin={(v) => onChange({ ...filters, ageMin: v })}
-        onMax={(v) => onChange({ ...filters, ageMax: v })}
-      />
-      <RangeFilter
-        label="mc ($)"
-        min={filters.mcMin}
-        max={filters.mcMax}
-        onMin={(v) => onChange({ ...filters, mcMin: v })}
-        onMax={(v) => onChange({ ...filters, mcMax: v })}
-      />
-      <label className="flex items-center gap-1.5 font-mono text-2xs text-fg-subtle cursor-pointer">
-        <input
-          type="checkbox"
-          checked={filters.liveOnly}
-          onChange={(e) => onChange({ ...filters, liveOnly: e.target.checked })}
-          className="accent-danger"
-        />
-        live only
-      </label>
+    <div className="flex items-center gap-3 flex-wrap mb-3">
+      {/* Filters dropdown trigger */}
+      <div ref={ref} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((s) => !s)}
+          className={cn(
+            "font-mono text-2xs px-2.5 py-1 border transition-colors",
+            count > 0 || open
+              ? "border-accent text-accent bg-accent/5"
+              : "border-border text-fg-muted hover:border-border-strong hover:text-fg",
+          )}
+        >
+          filters{count > 0 && <span className="ml-1">[{count}]</span>}
+        </button>
+
+        {open && (
+          <div className="absolute left-0 top-full mt-1 z-30 w-[460px] border border-border bg-bg shadow-xl p-3 space-y-3">
+            <FilterGroup label="age (minutes)">
+              <RangeFilter
+                min={filters.ageMin}
+                max={filters.ageMax}
+                onMin={(v) => onChange({ ...filters, ageMin: v })}
+                onMax={(v) => onChange({ ...filters, ageMax: v })}
+              />
+            </FilterGroup>
+            <FilterGroup label="market cap (USD)">
+              <RangeFilter
+                min={filters.mcMin}
+                max={filters.mcMax}
+                onMin={(v) => onChange({ ...filters, mcMin: v })}
+                onMax={(v) => onChange({ ...filters, mcMax: v })}
+              />
+            </FilterGroup>
+            <FilterGroup label="bonding curve (%)">
+              <RangeFilter
+                min={filters.curveMin}
+                max={filters.curveMax}
+                onMin={(v) => onChange({ ...filters, curveMin: v })}
+                onMax={(v) => onChange({ ...filters, curveMax: v })}
+              />
+            </FilterGroup>
+            <FilterGroup label="engagement">
+              <div className="flex items-center gap-2 font-mono text-2xs text-fg-subtle">
+                <span>min replies</span>
+                <input
+                  value={filters.repliesMin}
+                  onChange={(e) =>
+                    onChange({ ...filters, repliesMin: e.target.value })
+                  }
+                  placeholder="0"
+                  className="w-16 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
+                />
+              </div>
+            </FilterGroup>
+            <FilterGroup label="signal">
+              <div className="flex items-center gap-3 flex-wrap">
+                <ToggleFilter
+                  label="live only"
+                  checked={filters.liveOnly}
+                  onChange={(v) => onChange({ ...filters, liveOnly: v })}
+                  accent="danger"
+                />
+                <ToggleFilter
+                  label="has twitter"
+                  checked={filters.hasTwitter}
+                  onChange={(v) => onChange({ ...filters, hasTwitter: v })}
+                />
+                <ToggleFilter
+                  label="has telegram"
+                  checked={filters.hasTelegram}
+                  onChange={(v) => onChange({ ...filters, hasTelegram: v })}
+                />
+                <ToggleFilter
+                  label="has website"
+                  checked={filters.hasWebsite}
+                  onChange={(v) => onChange({ ...filters, hasWebsite: v })}
+                />
+              </div>
+            </FilterGroup>
+
+            {/* Planned for v0.1.32+: bundle %, holders, dev hold %, KOL count */}
+            <div className="border-t border-border pt-2 font-mono text-[10px] text-fg-subtle/60 leading-relaxed">
+              coming next: bundle %, holders, dev hold %, kol/smart-money
+              count, top-10 concentration. these need on-chain holder
+              indexing — landing in v0.1.32.
+            </div>
+
+            <div className="flex items-center justify-between border-t border-border pt-2">
+              <button
+                type="button"
+                onClick={() => onChange(DEFAULT_FILTERS)}
+                className="font-mono text-2xs text-fg-subtle hover:text-danger"
+              >
+                reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="font-mono text-2xs text-accent hover:underline"
+              >
+                done
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Always-visible compact summary of active filters */}
+      {count > 0 && (
+        <span className="font-mono text-2xs text-fg-subtle">
+          {filterSummary(filters)}
+        </span>
+      )}
+
       <span className="ml-auto flex items-center gap-1.5 font-mono text-2xs text-fg-subtle">
         <span>quick-buy</span>
         <input
@@ -471,15 +602,65 @@ function FilterBar({
         />
         <span>SOL</span>
       </span>
-      <button
-        type="button"
-        onClick={() => onChange(DEFAULT_FILTERS)}
-        className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
-      >
-        reset
-      </button>
     </div>
   );
+}
+
+function FilterGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="font-mono text-[10px] uppercase tracking-tight2 text-fg-subtle mb-1">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ToggleFilter({
+  label,
+  checked,
+  onChange,
+  accent,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  accent?: "accent" | "danger";
+}) {
+  return (
+    <label className="flex items-center gap-1.5 font-mono text-2xs text-fg-muted cursor-pointer">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className={accent === "danger" ? "accent-danger" : "accent-accent"}
+      />
+      {label}
+    </label>
+  );
+}
+
+function filterSummary(f: Filters): string {
+  const parts: string[] = [];
+  if (f.ageMin || f.ageMax)
+    parts.push(`age ${f.ageMin || "0"}–${f.ageMax || "∞"}m`);
+  if (f.mcMin || f.mcMax)
+    parts.push(`mc $${f.mcMin || "0"}–${f.mcMax || "∞"}`);
+  if (f.curveMin || f.curveMax)
+    parts.push(`curve ${f.curveMin || "0"}–${f.curveMax || "100"}%`);
+  if (f.repliesMin) parts.push(`≥${f.repliesMin} replies`);
+  if (f.liveOnly) parts.push("live");
+  if (f.hasTwitter) parts.push("tw");
+  if (f.hasTelegram) parts.push("tg");
+  if (f.hasWebsite) parts.push("web");
+  return parts.join(" · ");
 }
 
 function RangeFilter({
@@ -489,7 +670,7 @@ function RangeFilter({
   onMin,
   onMax,
 }: {
-  label: string;
+  label?: string;
   min: string;
   max: string;
   onMin: (v: string) => void;
@@ -497,19 +678,19 @@ function RangeFilter({
 }) {
   return (
     <div className="flex items-center gap-1 font-mono text-2xs text-fg-subtle">
-      <span>{label}</span>
+      {label && <span>{label}</span>}
       <input
         value={min}
         onChange={(e) => onMin(e.target.value)}
         placeholder="min"
-        className="w-14 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
+        className="w-20 bg-bg-raised border border-border px-1.5 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
       />
       <span className="text-fg-subtle/40">–</span>
       <input
         value={max}
         onChange={(e) => onMax(e.target.value)}
         placeholder="max"
-        className="w-14 bg-bg-raised border border-border px-1 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
+        className="w-20 bg-bg-raised border border-border px-1.5 py-0.5 font-mono text-2xs text-fg focus:outline-none focus:border-accent placeholder:text-fg-subtle/50"
       />
     </div>
   );
@@ -520,13 +701,31 @@ function applyFilters(coins: TrenchCoin[], f: Filters): TrenchCoin[] {
   const ageMax = parseFloat(f.ageMax);
   const mcMin = parseFloat(f.mcMin);
   const mcMax = parseFloat(f.mcMax);
+  const curveMin = parseFloat(f.curveMin);
+  const curveMax = parseFloat(f.curveMax);
+  const repliesMin = parseFloat(f.repliesMin);
   return coins.filter((c) => {
     if (f.liveOnly && !c.is_currently_live) return false;
+    if (f.hasTwitter && !c.twitter) return false;
+    if (f.hasTelegram && !c.telegram) return false;
+    if (f.hasWebsite && !c.website) return false;
     if (Number.isFinite(ageMin) && (c.age_minutes ?? 0) < ageMin) return false;
     if (Number.isFinite(ageMax) && (c.age_minutes ?? Infinity) > ageMax)
       return false;
     if (Number.isFinite(mcMin) && (c.usd_market_cap ?? 0) < mcMin) return false;
     if (Number.isFinite(mcMax) && (c.usd_market_cap ?? Infinity) > mcMax)
+      return false;
+    if (
+      Number.isFinite(curveMin) &&
+      (c.bonding_curve_progress_pct ?? 0) < curveMin
+    )
+      return false;
+    if (
+      Number.isFinite(curveMax) &&
+      (c.bonding_curve_progress_pct ?? Infinity) > curveMax
+    )
+      return false;
+    if (Number.isFinite(repliesMin) && (c.reply_count ?? 0) < repliesMin)
       return false;
     return true;
   });
