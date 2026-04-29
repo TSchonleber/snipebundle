@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
-import { type WalletInfo } from "@snipebundle/ui";
+import { cn, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
 import { WalletManager } from "../components/WalletManager";
 import { WalletPanel } from "../components/WalletPanel";
+import { ExportKeysModal } from "../components/ExportKeysModal";
 
 const DEFAULT_PER_WALLET = 0.55;
+
+type Section = "wallets" | "manage" | "fund";
+
+const SECTIONS: { id: Section; label: string; sub: string }[] = [
+  { id: "wallets", label: "wallets", sub: "operate" },
+  { id: "manage", label: "manage", sub: "create / import" },
+  { id: "fund", label: "fund", sub: "master → snipers" },
+];
 
 export function Wallets() {
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
@@ -14,6 +23,9 @@ export function Wallets() {
   const [snipers, setSnipers] = useState<WalletInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [recommended, setRecommended] = useState(DEFAULT_PER_WALLET);
+  const [section, setSection] = useState<Section>("wallets");
+  const [editingTemplates, setEditingTemplates] = useState(false);
+  const [showExport, setShowExport] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -49,12 +61,56 @@ export function Wallets() {
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
-      <div className="mx-auto max-w-5xl px-5 py-6">
-        <div className="flex items-baseline gap-3 mb-5">
-          <h1 className="font-mono text-base text-fg">wallets</h1>
-          <span className="font-mono text-2xs text-fg-subtle">
-            // your keys, your funding, your problem
-          </span>
+      <div className="mx-auto max-w-5xl px-5 py-5">
+        {/* Page subnav: section tabs left, contextual actions right. */}
+        <div className="flex items-center justify-between border-b border-border pb-2 mb-4">
+          <nav className="flex items-center gap-0.5">
+            {SECTIONS.map((s) => {
+              const active = section === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setSection(s.id)}
+                  className={cn(
+                    "relative font-mono text-2xs px-2.5 py-1 transition-colors",
+                    "after:absolute after:left-2 after:right-2 after:bottom-0 after:h-px after:bg-accent after:transition-opacity",
+                    active
+                      ? "text-fg after:opacity-100"
+                      : "text-fg-subtle hover:text-fg-muted after:opacity-0",
+                  )}
+                  title={s.sub}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </nav>
+          {section === "wallets" && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingTemplates((s) => !s)}
+                className={cn(
+                  "font-mono text-2xs transition-colors",
+                  editingTemplates
+                    ? "text-accent"
+                    : "text-fg-subtle hover:text-fg-muted",
+                )}
+                title="Edit shared profile templates (affects every wallet bound to them)"
+              >
+                {editingTemplates ? "[ done ]" : "tpl"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowExport(true)}
+                className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
+                title="Reveal & export private keys for backup (passphrase required)"
+              >
+                keys
+              </button>
+            </div>
+          )}
         </div>
 
         {error && (
@@ -63,46 +119,76 @@ export function Wallets() {
           </div>
         )}
 
-        {wallets.length > 0 && (
-          <div className="mb-5">
-            <WalletPanel wallets={wallets} mode="full" onConfigChanged={load} />
-          </div>
+        {section === "wallets" && wallets.length > 0 && (
+          <WalletPanel
+            wallets={wallets}
+            mode="full"
+            onConfigChanged={load}
+            chromeless
+            editingTemplatesExternal={editingTemplates}
+            onCloseTemplates={() => setEditingTemplates(false)}
+          />
         )}
 
-        {wallets.length > 0 && (
-          <div className="mb-5">
-            <WalletManager wallets={wallets} onChanged={load} />
-          </div>
+        {section === "manage" && (
+          <>
+            {wallets.length > 0 ? (
+              <WalletManager wallets={wallets} onChanged={load} />
+            ) : (
+              <EmptyHint>no wallets yet — go to /welcome to create a keystore</EmptyHint>
+            )}
+          </>
         )}
 
-        {master && snipers.length > 0 && (
-          <div className="mb-5">
-            <FanOutPanel
-              master={master}
-              snipers={snipers}
-              recommendedSol={recommended}
-            />
-          </div>
+        {section === "fund" && (
+          <>
+            {master && snipers.length > 0 ? (
+              <>
+                <FanOutPanel
+                  master={master}
+                  snipers={snipers}
+                  recommendedSol={recommended}
+                />
+                <FundingNotes recommended={recommended} />
+              </>
+            ) : (
+              <EmptyHint>need a master + at least one sniper to fan-out funding</EmptyHint>
+            )}
+          </>
         )}
-
-        <div className="mt-8 border-t border-border pt-4">
-          <div className="font-mono text-2xs text-fg-subtle mb-2">
-            // funding notes
-          </div>
-          <ul className="space-y-1 font-mono text-2xs text-fg-muted">
-            <li>
-              recommended per sniper ≈{" "}
-              <span className="text-fg">{recommended.toFixed(3)} SOL</span>{" "}
-              (snipe + jito tip + priority fee + buffer)
-            </li>
-            <li>
-              fund each wallet from a different source so chain analytics
-              can't trivially group them
-            </li>
-            <li>balances poll every ~8s</li>
-          </ul>
-        </div>
       </div>
+
+      {showExport && <ExportKeysModal onClose={() => setShowExport(false)} />}
+    </div>
+  );
+}
+
+function EmptyHint({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="hatch border border-dashed border-border px-4 py-8 text-center font-mono text-2xs text-fg-subtle">
+      {children}
+    </div>
+  );
+}
+
+function FundingNotes({ recommended }: { recommended: number }) {
+  return (
+    <div className="mt-6 border-t border-border pt-3">
+      <div className="font-mono text-2xs text-fg-subtle mb-1.5">
+        // notes
+      </div>
+      <ul className="space-y-1 font-mono text-2xs text-fg-muted">
+        <li>
+          recommended per sniper ≈{" "}
+          <span className="text-fg">{recommended.toFixed(3)} SOL</span>{" "}
+          (snipe + jito tip + priority fee + buffer)
+        </li>
+        <li>
+          fund each wallet from a different source so chain analytics can't
+          trivially group them
+        </li>
+        <li>balances poll every ~8s</li>
+      </ul>
     </div>
   );
 }

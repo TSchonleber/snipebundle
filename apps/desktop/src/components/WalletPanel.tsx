@@ -80,6 +80,15 @@ interface Props {
   onConfigChanged?: () => void;
   activeMint?: string;
   onActiveMintChange?: (mint: string) => void;
+  /**
+   * Controlled "edit templates" affordance — when provided the panel renders
+   * its inline editor based on this flag and skips its own header button.
+   * Lets the parent (Wallets page) put the trigger in the subnav.
+   */
+  editingTemplatesExternal?: boolean;
+  onCloseTemplates?: () => void;
+  /** When true, hide the in-panel header (parent owns the title row). */
+  chromeless?: boolean;
 }
 
 const BALANCE_POLL_MS = 10_000;
@@ -91,6 +100,9 @@ export function WalletPanel({
   onConfigChanged,
   activeMint: activeMintProp,
   onActiveMintChange,
+  editingTemplatesExternal,
+  onCloseTemplates,
+  chromeless = false,
 }: Props) {
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [balances, setBalances] = useState<Record<string, number>>({});
@@ -282,47 +294,53 @@ export function WalletPanel({
   }
 
   const compact = mode === "compact";
-  const [editingTemplates, setEditingTemplates] = useState(false);
+  const [editingTemplatesLocal, setEditingTemplatesLocal] = useState(false);
+  const editingTemplates =
+    editingTemplatesExternal !== undefined
+      ? editingTemplatesExternal
+      : editingTemplatesLocal;
+  const closeTemplates = () =>
+    onCloseTemplates ? onCloseTemplates() : setEditingTemplatesLocal(false);
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-baseline gap-2">
-            <h3 className="font-mono text-[13px] text-fg">
-              {compact ? "wallets" : "wallets"}
-            </h3>
-            <span className="font-mono text-2xs text-fg-subtle">
-              [{wallets.length}]
-            </span>
-          </div>
-          {!compact && (
-            <div className="flex items-center gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => setEditingTemplates((s) => !s)}
-                className={cn(
-                  "font-mono text-2xs transition-colors",
-                  editingTemplates
-                    ? "text-accent"
-                    : "text-fg-subtle hover:text-fg-muted",
-                )}
-                title="Edit shared profile templates (affects every wallet bound to them)"
-              >
-                {editingTemplates ? "[ done ]" : "edit templates"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowExport(true)}
-                className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
-                title="Reveal & export private keys for backup"
-              >
-                export keys
-              </button>
+      {!chromeless && (
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-baseline gap-2">
+              <h3 className="font-mono text-[13px] text-fg">wallets</h3>
+              <span className="font-mono text-2xs text-fg-subtle">
+                [{wallets.length}]
+              </span>
             </div>
-          )}
-        </div>
-      </CardHeader>
+            {!compact && (
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingTemplatesLocal((s) => !s)}
+                  className={cn(
+                    "font-mono text-2xs transition-colors",
+                    editingTemplates
+                      ? "text-accent"
+                      : "text-fg-subtle hover:text-fg-muted",
+                  )}
+                  title="Edit shared profile templates (affects every wallet bound to them)"
+                >
+                  {editingTemplates ? "[ done ]" : "edit templates"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowExport(true)}
+                  className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
+                  title="Reveal & export private keys for backup"
+                >
+                  export keys
+                </button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+      )}
       <CardBody className="space-y-3">
         {/* Active mint input — global to the panel */}
         <div className="flex items-center gap-3">
@@ -350,9 +368,9 @@ export function WalletPanel({
             subtitle="Applies to every wallet bound to a template"
             onSave={(next) => {
               saveTemplates(next);
-              setEditingTemplates(false);
+              closeTemplates();
             }}
-            onCancel={() => setEditingTemplates(false)}
+            onCancel={closeTemplates}
           />
         )}
 
@@ -461,6 +479,10 @@ function WalletRow({
 }) {
   const [copied, setCopied] = useState(false);
   const [editingCustom, setEditingCustom] = useState(false);
+  // Rows are collapsed by default — most of the time the user is glancing at
+  // balance / pnl, not changing the profile. Click anywhere on the header to
+  // toggle the controls (profile pills, SL/TS, presets).
+  const [expanded, setExpanded] = useState(false);
   const isMaster = wallet.label === "master";
 
   async function copy() {
@@ -484,37 +506,76 @@ function WalletRow({
     ? binding.custom
     : templates[binding.selected_template ?? 0] ?? binding.custom;
 
+  const activeProfileLabel = (
+    binding.custom.label?.trim() ||
+    activeProfile.label ||
+    "custom"
+  ).toLowerCase();
+
   return (
     <div
       className={cn(
-        "border-l-2 bg-bg-subtle/40 px-4 py-3 transition-colors",
+        "border-l-2 bg-bg-subtle/40 transition-colors",
         isMaster
           ? "border-l-accent"
-          : "border-l-border hover:border-l-fg-subtle",
+          : expanded
+            ? "border-l-fg-subtle"
+            : "border-l-border hover:border-l-fg-subtle",
       )}
     >
-      {/* Header: identity + balance + P&L */}
-      <div className="flex items-center justify-between gap-3">
+      {/* Header — always visible. Click toggles row expansion. */}
+      <button
+        type="button"
+        onClick={() => setExpanded((s) => !s)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
+      >
         <div className="flex items-center gap-2 min-w-0">
           <span
             className={cn(
-              "shrink-0 font-mono text-2xs",
+              "shrink-0 font-mono text-2xs w-12",
               isMaster ? "text-accent" : "text-fg-muted",
             )}
           >
             {wallet.label}
           </span>
-          <button
-            type="button"
-            onClick={copy}
+          <span
             className="font-mono text-xs text-fg-subtle hover:text-fg-muted truncate transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              copy();
+            }}
             title="copy pubkey"
           >
-            {copied ? "copied" : `${wallet.pubkey.slice(0, 8)}..${wallet.pubkey.slice(-4)}`}
-          </button>
+            {copied
+              ? "copied"
+              : `${wallet.pubkey.slice(0, 8)}..${wallet.pubkey.slice(-4)}`}
+          </span>
+          {/* Compact summary chip — shown only when collapsed. */}
+          {!expanded && (
+            <span
+              className={cn(
+                "ml-2 inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-mono text-2xs",
+                usingCustom
+                  ? "border-warn/50 text-warn"
+                  : "border-border text-fg-muted",
+              )}
+            >
+              <span>{activeProfileLabel}</span>
+              <span className="text-fg-subtle">·</span>
+              <span className="text-fg-subtle">
+                tp{activeProfile.take_profit_pct}
+                {binding.stop_loss_enabled
+                  ? ` sl${activeProfile.stop_loss_pct}`
+                  : " sl-off"}
+              </span>
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4 text-right">
-          <Stat label="bal" value={balance != null ? balance.toFixed(3) : "—"} />
+          <Stat
+            label="bal"
+            value={balance != null ? balance.toFixed(3) : "—"}
+          />
           <Stat
             label="pnl"
             value={realizedLabel}
@@ -532,11 +593,23 @@ function WalletRow({
               </div>
             </div>
           )}
+          <span
+            className={cn(
+              "ml-1 font-mono text-2xs text-fg-subtle transition-transform select-none",
+              expanded ? "rotate-90" : "",
+            )}
+            aria-hidden
+          >
+            ›
+          </span>
         </div>
-      </div>
+      </button>
+
+      {!expanded ? null : (
+        <div className="px-4 pb-3">
 
       {/* Profile + risk row */}
-      <div className="mt-3">
+      <div className="mt-1">
         <div className="flex items-center justify-between mb-1.5">
           <span className="font-mono text-2xs text-fg-subtle">profile</span>
           <span className="font-mono text-2xs text-fg-muted">
@@ -671,6 +744,8 @@ function WalletRow({
       {feedback && (
         <div className="mt-3 border-l-2 border-accent/60 bg-accent/5 px-3 py-1.5 font-mono text-2xs text-accent">
           {feedback}
+        </div>
+      )}
         </div>
       )}
     </div>
