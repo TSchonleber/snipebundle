@@ -8,7 +8,7 @@ import {
   cn,
   type WalletInfo,
 } from "@snipebundle/ui";
-import { ipc, type AmountStrategy } from "../lib/ipc";
+import { ipc, type AmountStrategy, type AppConfig } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { MintChart } from "../components/MintChart";
 
@@ -35,15 +35,45 @@ export function Trade() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<BundleRecord[]>([]);
+  const [cfg, setCfg] = useState<AppConfig | null>(null);
 
   useEffect(() => {
     Promise.all([
       ipc.listWallets(),
       ipc.listDevWallets().catch(() => [] as WalletInfo[]),
+      ipc.loadConfig().catch(() => null),
     ])
-      .then(([base, devs]) => setWallets([...base, ...devs]))
+      .then(([base, devs, c]) => {
+        setWallets([...base, ...devs]);
+        if (c) setCfg(c);
+      })
       .catch((e) => setError(String(e)));
   }, []);
+
+  // Resolve a wallet's buy preset chips: per-wallet binding overrides the
+  // global config presets if it exists, otherwise fall back to global.
+  // The same preset chips that show on the wallet-panel quick-buy row,
+  // so what the user configured per wallet now follows them into Trade.
+  function buyPresetsFor(pubkey: string): number[] {
+    const binding = cfg?.wallet_bindings?.[pubkey];
+    const wallet = binding?.buy_presets_sol;
+    if (wallet && wallet.length > 0) return wallet;
+    return cfg?.presets?.buy_presets_sol ?? [];
+  }
+  // Sell percent presets are configured globally — same chips everywhere.
+  const sellPresets = useMemo<number[]>(() => {
+    const fromCfg = cfg?.presets?.sell_presets_pct;
+    if (fromCfg && fromCfg.length > 0) return fromCfg;
+    return [25, 50, 75, 100];
+  }, [cfg]);
+  // Default amount for a freshly-picked wallet in per-wallet mode: prefer
+  // its own first preset, fall back to global first preset, then to the
+  // current uniform input.
+  function defaultAmountFor(pubkey: string): string {
+    const presets = buyPresetsFor(pubkey);
+    if (presets.length > 0) return String(presets[0]);
+    return uniformSol;
+  }
 
   const totalUniform = useMemo(() => {
     const v = parseFloat(uniformSol);
@@ -74,7 +104,10 @@ export function Trade() {
     } else {
       setPicked([...picked, pk]);
       if (!perWalletAmounts[pk]) {
-        setPerWalletAmounts({ ...perWalletAmounts, [pk]: uniformSol });
+        setPerWalletAmounts({
+          ...perWalletAmounts,
+          [pk]: defaultAmountFor(pk),
+        });
       }
     }
   }
@@ -233,6 +266,21 @@ export function Trade() {
                       onChange={(e) => setUniformSol(e.target.value)}
                       className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                     />
+                    {(cfg?.presets?.buy_presets_sol?.length ?? 0) > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {cfg!.presets.buy_presets_sol.map((sol: number) => (
+                          <button
+                            key={sol}
+                            type="button"
+                            onClick={() => setUniformSol(String(sol))}
+                            className="rounded border border-border px-2 py-0.5 font-mono text-2xs text-fg-subtle hover:text-fg hover:border-fg-subtle"
+                            title={`use ${sol} SOL preset`}
+                          >
+                            {sol}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <p className="mt-1 text-xs text-fg-subtle">
                       Total: {totalUniform.toFixed(4)} SOL across {picked.length} wallets
                     </p>
@@ -256,30 +304,53 @@ export function Trade() {
                     ) : (
                       picked.map((pk) => {
                         const w = wallets.find((x) => x.pubkey === pk);
+                        const presets = buyPresetsFor(pk);
                         return (
                           <div
                             key={pk}
-                            className="flex items-center gap-3 rounded-lg border border-border bg-bg-raised px-3 py-2"
+                            className="rounded-lg border border-border bg-bg-raised px-3 py-2"
                           >
-                            <span className="font-mono text-xs text-fg-muted w-20 shrink-0">
-                              {w?.label ?? "?"}
-                            </span>
-                            <span className="font-mono text-[10px] text-fg-subtle truncate flex-1">
-                              {pk.slice(0, 12)}…
-                            </span>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={perWalletAmounts[pk] ?? ""}
-                              onChange={(e) =>
-                                setPerWalletAmounts({
-                                  ...perWalletAmounts,
-                                  [pk]: e.target.value,
-                                })
-                              }
-                              className="w-24 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
-                            />
-                            <span className="text-xs text-fg-subtle">SOL</span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-mono text-xs text-fg-muted w-20 shrink-0">
+                                {w?.label ?? "?"}
+                              </span>
+                              <span className="font-mono text-[10px] text-fg-subtle truncate flex-1">
+                                {pk.slice(0, 12)}…
+                              </span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={perWalletAmounts[pk] ?? ""}
+                                onChange={(e) =>
+                                  setPerWalletAmounts({
+                                    ...perWalletAmounts,
+                                    [pk]: e.target.value,
+                                  })
+                                }
+                                className="w-24 rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-right focus:outline-none focus:ring-2 focus:ring-accent"
+                              />
+                              <span className="text-xs text-fg-subtle">SOL</span>
+                            </div>
+                            {presets.length > 0 && (
+                              <div className="mt-1.5 flex flex-wrap gap-1 pl-[5.75rem]">
+                                {presets.map((sol) => (
+                                  <button
+                                    key={sol}
+                                    type="button"
+                                    onClick={() =>
+                                      setPerWalletAmounts({
+                                        ...perWalletAmounts,
+                                        [pk]: String(sol),
+                                      })
+                                    }
+                                    className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle hover:text-fg hover:border-fg-subtle"
+                                    title={`use ${w?.label ?? "wallet"}'s ${sol} SOL preset`}
+                                  >
+                                    {sol}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         );
                       })
@@ -343,8 +414,13 @@ export function Trade() {
                     onChange={(e) => setSellPercent(parseInt(e.target.value, 10))}
                     className="w-full accent-accent"
                   />
-                  <div className="mt-1 grid grid-cols-4 gap-1 text-xs">
-                    {[25, 50, 75, 100].map((p) => (
+                  <div
+                    className="mt-1 grid gap-1 text-xs"
+                    style={{
+                      gridTemplateColumns: `repeat(${Math.max(1, sellPresets.length)}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {sellPresets.map((p) => (
                       <button
                         key={p}
                         onClick={() => setSellPercent(p)}
