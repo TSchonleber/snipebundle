@@ -30,6 +30,12 @@ export function Trade() {
   const [randomMin, setRandomMin] = useState("0.02");
   const [randomMax, setRandomMax] = useState("0.10");
   const [sellPercent, setSellPercent] = useState(100);
+  // Optional follow-up buy after a manual sell. The user clicks SELL, the
+  // sell bundle submits, and the moment we have a bundle ID back we fire
+  // a fresh buy on the same mint with the same wallets at this SOL
+  // amount. One-shot: not a loop, the user re-enables for each chain.
+  const [rebuyEnabled, setRebuyEnabled] = useState(false);
+  const [rebuyAmount, setRebuyAmount] = useState("0.05");
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -166,6 +172,14 @@ export function Trade() {
     if (sellPercent <= 0 || sellPercent > 100) {
       return setError("Sell % must be 1–100.");
     }
+    let rebuySol: number | null = null;
+    if (rebuyEnabled) {
+      const v = parseFloat(rebuyAmount);
+      if (!Number.isFinite(v) || v <= 0) {
+        return setError("Rebuy amount must be positive.");
+      }
+      rebuySol = v;
+    }
     setBusy(true);
     try {
       const id = await ipc.manualDump({
@@ -177,6 +191,27 @@ export function Trade() {
         { kind: "sell", bundle_id: id, mint: mint.trim(), ts: Date.now() },
         ...h,
       ]);
+      if (rebuySol != null) {
+        // Chain a follow-up buy. Same wallets, same mint, uniform amount.
+        // We fire it in the same submit handler so the user sees both
+        // bundle IDs in the history without needing to click again. If
+        // the rebuy itself errors, surface that error but keep the sell
+        // entry — the sell already submitted, and the user needs to know
+        // the chain broke.
+        try {
+          const buyId = await ipc.manualSnipe({
+            mint: mint.trim(),
+            wallet_pubkeys: picked,
+            strategy: { kind: "uniform", sol: rebuySol },
+          });
+          setHistory((h) => [
+            { kind: "buy", bundle_id: buyId, mint: mint.trim(), ts: Date.now() },
+            ...h,
+          ]);
+        } catch (e) {
+          setError(`Sell submitted but rebuy failed: ${e}`);
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -441,6 +476,40 @@ export function Trade() {
                   Solana RPC. Wallets holding none of this mint are skipped
                   automatically.
                 </p>
+
+                <div className="rounded-lg border border-border bg-bg-raised px-3 py-2 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={rebuyEnabled}
+                      onChange={(e) => setRebuyEnabled(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-accent"
+                    />
+                    <span className="text-sm font-semibold">
+                      Rebuy after sell
+                    </span>
+                    <span className="font-mono text-2xs text-fg-subtle">
+                      // chain a buy bundle right after this sell submits
+                    </span>
+                  </label>
+                  {rebuyEnabled && (
+                    <div className="flex items-center gap-2 pl-6">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={rebuyAmount}
+                        onChange={(e) => setRebuyAmount(e.target.value)}
+                        placeholder="SOL"
+                        className="w-28 rounded border border-border bg-bg px-2 py-1 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                      />
+                      <span className="font-mono text-2xs text-fg-subtle">
+                        SOL per wallet, same {picked.length || "?"} wallet
+                        {picked.length === 1 ? "" : "s"} as the sell
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <Button
                   size="lg"
                   variant="danger"
@@ -448,7 +517,9 @@ export function Trade() {
                   disabled={busy}
                   className="w-full"
                 >
-                  {busy ? "Submitting…" : `SELL ${sellPercent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
+                  {busy
+                    ? "Submitting…"
+                    : `SELL ${sellPercent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}${rebuyEnabled ? ` → REBUY ${rebuyAmount} SOL` : ""}`}
                 </Button>
               </CardBody>
             </Card>
