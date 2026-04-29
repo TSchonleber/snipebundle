@@ -112,6 +112,19 @@ export function MultiRaydiumLaunchPanel({ devWallets, snipers }: Props) {
   function addToken() {
     setTokens((prev) => [...prev, freshToken()]);
   }
+  function duplicateToken(id: string) {
+    setTokens((prev) => {
+      if (prev.length >= 10) return prev;
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx < 0) return prev;
+      const src = prev[idx];
+      seq += 1;
+      const copy: RaydiumTokenDraft = { ...src, id: `ray-${seq}` };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+  }
   async function pickImage(id: string) {
     try {
       const path = await openDialog({
@@ -336,8 +349,10 @@ export function MultiRaydiumLaunchPanel({ devWallets, snipers }: Props) {
               sharedDevBuy={sharedDevBuy}
               onPatch={(patch) => patchToken(t.id, patch)}
               onRemove={() => removeToken(t.id)}
+              onDuplicate={() => duplicateToken(t.id)}
               onPickImage={() => pickImage(t.id)}
               removable={tokens.length > 1}
+              duplicable={tokens.length < 10}
             />
           ))}
           <Button
@@ -457,8 +472,10 @@ interface CardProps {
   sharedDevBuy: string;
   onPatch: (patch: Partial<RaydiumTokenDraft>) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
   onPickImage: () => void;
   removable: boolean;
+  duplicable: boolean;
 }
 
 function RaydiumTokenCard({
@@ -474,8 +491,10 @@ function RaydiumTokenCard({
   sharedDevBuy,
   onPatch,
   onRemove,
+  onDuplicate,
   onPickImage,
   removable,
+  duplicable,
 }: CardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -494,15 +513,27 @@ function RaydiumTokenCard({
         <div className="font-mono text-2xs uppercase tracking-wider text-fg-subtle">
           token #{index}
         </div>
-        {removable && (
-          <button
-            type="button"
-            onClick={onRemove}
-            className="font-mono text-2xs text-danger/70 hover:text-danger"
-          >
-            remove
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {duplicable && (
+            <button
+              type="button"
+              onClick={onDuplicate}
+              className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+              title="duplicate this token (copies all fields, fresh id)"
+            >
+              duplicate
+            </button>
+          )}
+          {removable && (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="font-mono text-2xs text-danger/70 hover:text-danger"
+            >
+              remove
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-[1fr_120px]">

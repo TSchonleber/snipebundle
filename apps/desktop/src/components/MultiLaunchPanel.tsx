@@ -99,6 +99,22 @@ export function MultiLaunchPanel({ devWallets, snipers, onComplete }: Props) {
   function addToken() {
     setTokens((prev) => [...prev, freshToken()]);
   }
+  function duplicateToken(id: string) {
+    setTokens((prev) => {
+      if (prev.length >= 10) return prev;
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx < 0) return prev;
+      const src = prev[idx];
+      // Fresh id so React keys stay unique; everything else copies
+      // verbatim so the user only edits what's actually different
+      // (typically just the symbol/name).
+      tokenSeq += 1;
+      const copy: TokenDraft = { ...src, id: `${NEW_TOKEN_ID_PREFIX}${tokenSeq}` };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+  }
 
   async function pickImage(id: string) {
     try {
@@ -279,8 +295,10 @@ export function MultiLaunchPanel({ devWallets, snipers, onComplete }: Props) {
               sharedCoGroupId={sharedCoGroupId}
               onPatch={(patch) => patchToken(t.id, patch)}
               onRemove={() => removeToken(t.id)}
+              onDuplicate={() => duplicateToken(t.id)}
               onPickImage={() => pickImage(t.id)}
               removable={tokens.length > 1}
+              duplicable={tokens.length < 10}
             />
           ))}
           <Button
@@ -390,8 +408,10 @@ interface CardProps {
   sharedCoGroupId: string;
   onPatch: (patch: Partial<TokenDraft>) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
   onPickImage: () => void;
   removable: boolean;
+  duplicable: boolean;
 }
 
 function TokenCard({
@@ -404,8 +424,10 @@ function TokenCard({
   sharedCoGroupId,
   onPatch,
   onRemove,
+  onDuplicate,
   onPickImage,
   removable,
+  duplicable,
 }: CardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -422,15 +444,27 @@ function TokenCard({
         <div className="font-mono text-2xs uppercase tracking-wider text-fg-subtle">
           token #{index}
         </div>
-        {removable && (
-          <button
-            type="button"
-            onClick={onRemove}
-            className="font-mono text-2xs text-danger/70 hover:text-danger"
-          >
-            remove
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {duplicable && (
+            <button
+              type="button"
+              onClick={onDuplicate}
+              className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+              title="duplicate this token (copies all fields, fresh id)"
+            >
+              duplicate
+            </button>
+          )}
+          {removable && (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="font-mono text-2xs text-danger/70 hover:text-danger"
+            >
+              remove
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-[1fr_120px]">
