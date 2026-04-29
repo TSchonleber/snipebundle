@@ -68,25 +68,28 @@ export function Trending() {
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
-      <div className="mx-auto max-w-6xl px-6 py-8">
-        <div className="flex items-end justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Trending</h1>
-            <p className="mt-2 text-fg-muted text-sm">
-              Free aggregated signal feed: DexScreener boosts + Solana pairs and
-              GeckoTerminal trending pools. No X API. Refreshes every 30s. Launch a
-              token from the symbol or snipe the mint with one click.
-            </p>
+      <div className="mx-auto max-w-6xl px-5 py-5">
+        <div className="flex items-baseline justify-between border-b border-border pb-3 mb-4 gap-3">
+          <div className="flex items-baseline gap-3">
+            <h1 className="font-mono text-base text-fg">trending</h1>
+            <span className="font-mono text-2xs text-fg-subtle">
+              // dexscreener + geckoterminal · refresh 30s
+            </span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-fg-subtle">
+            <span className="font-mono text-2xs text-fg-subtle">
               {lastFetch
                 ? `updated ${new Date(lastFetch).toLocaleTimeString()}`
                 : "—"}
             </span>
-            <Button size="sm" variant="secondary" onClick={refresh} disabled={loading}>
-              {loading ? "Refreshing…" : "Refresh"}
-            </Button>
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={loading}
+              className="font-mono text-2xs px-2.5 py-1 border border-border text-fg-muted hover:text-fg hover:border-border-strong transition-colors disabled:opacity-50"
+            >
+              {loading ? "refreshing…" : "refresh"}
+            </button>
           </div>
         </div>
 

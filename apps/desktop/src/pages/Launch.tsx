@@ -274,15 +274,15 @@ export function Launch() {
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <h1 className="text-3xl font-bold tracking-tight">Launch a token</h1>
-        <p className="mt-2 text-fg-muted">
-          Atomic single-bundle pump.fun launch. Your dev wallet creates the
-          token + makes its opening buy in the same Jito bundle. Defensive
-          against third-party snipers.
-        </p>
+      <div className="mx-auto max-w-4xl px-5 py-5">
+        <div className="flex items-baseline gap-3 border-b border-border pb-3 mb-5">
+          <h1 className="font-mono text-base text-fg">launch</h1>
+          <span className="font-mono text-2xs text-fg-subtle">
+            // dev creates token + opening buy in one jito bundle
+          </span>
+        </div>
 
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -448,8 +448,8 @@ export function Launch() {
                                   {s.pubkey.slice(0, 16)}…
                                 </code>
                                 {isSel && (
-                                  <span className="font-mono text-xs text-accent">
-                                    ✓
+                                  <span className="font-mono text-2xs text-accent">
+                                    on
                                   </span>
                                 )}
                               </div>
@@ -707,7 +707,7 @@ function LaunchResultCard({ result }: { result: LaunchResult }) {
   return (
     <Card className="shadow-glow">
       <CardHeader>
-        <h2 className="font-semibold text-accent">✓ Launch submitted</h2>
+        <h2 className="font-mono text-sm text-accent">launch submitted</h2>
       </CardHeader>
       <CardBody className="space-y-3 text-sm">
         <Row label="Mint">
@@ -872,7 +872,7 @@ function LaunchSellPanel({
       <CardHeader className="bg-warn/5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="font-bold text-lg text-warn">▼ Sell launch position</h2>
+            <h2 className="font-mono text-sm text-warn">sell launch position</h2>
             <p className="mt-0.5 text-xs text-fg-muted">
               The token is live. When you decide to exit, pick wallets +
               percent and click <span className="font-semibold text-fg">SELL NOW</span>.
@@ -927,7 +927,7 @@ function LaunchSellPanel({
                             : "border-border bg-bg",
                         )}
                       >
-                        {isPicked && <span className="text-xs font-bold">✓</span>}
+                        {isPicked && <span className="text-xs font-bold">×</span>}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
@@ -1065,13 +1065,13 @@ function LaunchSellPanel({
               ? "Submitting…"
               : picked.length === 0
                 ? "Select wallets above to enable"
-                : `▼ SELL NOW — ${percent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
+                : `sell now — ${percent}% from ${picked.length} wallet${picked.length === 1 ? "" : "s"}`}
           </Button>
 
           {bundleIds.length > 0 && (
-            <div className="mt-4 rounded-lg border border-accent/40 bg-accent/5 p-3">
-              <div className="text-xs font-semibold text-accent uppercase tracking-wider">
-                ✓ {bundleIds.length} bundle{bundleIds.length === 1 ? "" : "s"} submitted
+            <div className="mt-4 border-l-2 border-accent bg-accent/5 px-3 py-2">
+              <div className="font-mono text-2xs text-accent">
+                {bundleIds.length} bundle{bundleIds.length === 1 ? "" : "s"} submitted
               </div>
               <ul className="mt-2 space-y-1">
                 {bundleIds.map((id) => (

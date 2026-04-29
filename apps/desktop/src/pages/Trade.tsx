@@ -159,15 +159,15 @@ export function Trade() {
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <h1 className="text-3xl font-bold tracking-tight">Manual trade</h1>
-        <p className="mt-2 text-fg-muted">
-          Pick a mint, pick up to 5 wallets, choose how SOL is allocated. BUY
-          spends from those wallets; SELL liquidates a chosen percent of each
-          wallet's actual token balance (queried live from Solana RPC).
-        </p>
+      <div className="mx-auto max-w-5xl px-5 py-5">
+        <div className="flex items-baseline gap-3 border-b border-border pb-3 mb-5">
+          <h1 className="font-mono text-base text-fg">trade</h1>
+          <span className="font-mono text-2xs text-fg-subtle">
+            // manual buy / sell — up to 5 wallets per bundle
+          </span>
+        </div>
 
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -459,8 +459,8 @@ export function Trade() {
                             {w.label}
                           </span>
                           {isSel && (
-                            <span className="font-mono text-xs text-accent">
-                              ✓
+                            <span className="font-mono text-2xs text-accent">
+                              on
                             </span>
                           )}
                         </div>

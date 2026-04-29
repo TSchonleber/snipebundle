@@ -552,11 +552,15 @@ function WalletRow({
               ? "copied"
               : `${wallet.pubkey.slice(0, 8)}..${wallet.pubkey.slice(-4)}`}
           </span>
-          {/* Compact summary chip — shown only when collapsed. */}
-          {!expanded && (
+          {/* Compact summary chip — shown only when collapsed and there's
+              room. In the Sniper sidebar (compact mode) we skip it entirely
+              since the column is ~320px and the chip would crowd the
+              bal/pnl cluster. On the full Wallets page we show it but only
+              on wider rows (md:) so narrow viewports don't wrap it. */}
+          {!expanded && !compact && (
             <span
               className={cn(
-                "ml-2 inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-mono text-2xs",
+                "ml-2 hidden md:inline-flex shrink-0 items-center gap-1.5 border px-1.5 py-0.5 font-mono text-2xs whitespace-nowrap",
                 usingCustom
                   ? "border-warn/50 text-warn"
                   : "border-border text-fg-muted",
@@ -613,7 +617,15 @@ function WalletRow({
       {/* Profile + risk row */}
       <div className="mt-1">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="font-mono text-2xs text-fg-subtle">profile</span>
+          <span className="font-mono text-2xs text-fg-subtle">
+            profile{" "}
+            <span
+              className="text-fg-subtle/70"
+              title="Templates are SHARED across every wallet bound to them. Custom is per-wallet only."
+            >
+              (shared · custom = solo)
+            </span>
+          </span>
           <span className="font-mono text-2xs text-fg-muted">
             tp+{activeProfile.take_profit_pct}
             <span className="text-fg-subtle"> / </span>
