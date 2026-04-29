@@ -210,6 +210,56 @@ export interface MultiLaunchOutcome {
   error: string | null;
 }
 
+/** v0.1.55: volume bot config + status. */
+export type VolumeAmountSpec =
+  | { kind: "uniform"; sol: number }
+  | { kind: "random"; min_sol: number; max_sol: number };
+
+export type VolumeIntervalSpec =
+  | { kind: "fixed"; seconds: number }
+  | { kind: "random"; min_seconds: number; max_seconds: number };
+
+export interface VolumeStopGuards {
+  market_cap_max_sol?: number | null;
+  market_cap_min_sol?: number | null;
+  pnl_take_profit_sol?: number | null;
+  pnl_stop_loss_sol?: number | null;
+  outsider_buy_min_sol?: number | null;
+  max_cycles?: number | null;
+}
+
+export interface VolumeBotConfig {
+  mint: string;
+  wallet_pubkeys: string[];
+  buy_amount: VolumeAmountSpec;
+  sell_percent: number;
+  interval_between_cycles: VolumeIntervalSpec;
+  buy_to_sell_gap: VolumeIntervalSpec | null;
+  stop_guards: VolumeStopGuards;
+  sell_on_stop: boolean;
+}
+
+export interface VolumeBotStatus {
+  running: boolean;
+  cycles_completed: number;
+  buys_submitted: number;
+  sells_submitted: number;
+  failures: number;
+  session_sol_in: number;
+  session_sol_out: number;
+  last_event_ms: number;
+  last_message: string;
+  current_mc_sol: number | null;
+  last_observed_price_sol: number | null;
+  stop_reason: string | null;
+}
+
+export interface VolumeSessionInfo {
+  id: string;
+  mint: string;
+  status: VolumeBotStatus;
+}
+
 export interface ImportDevArgs {
   label: string;
   secret_b58: string;
@@ -267,6 +317,12 @@ export const ipc = {
     invoke<MultiLaunchOutcome[]>("launch_multiple_tokens", {
       args: { launches },
     }),
+  startVolumeSession: (config: VolumeBotConfig) =>
+    invoke<string>("start_volume_session", { args: { config } }),
+  stopVolumeSession: (id: string) =>
+    invoke<null>("stop_volume_session", { args: { id } }),
+  listVolumeSessions: () =>
+    invoke<VolumeSessionInfo[]>("list_volume_sessions"),
   getBalances: (pubkeys: string[]) =>
     invoke<Record<string, number>>("get_balances", { pubkeys }),
   fanOutFromMaster: (recipients: string[], solPerWallet: number) =>

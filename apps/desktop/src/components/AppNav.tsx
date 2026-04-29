@@ -13,6 +13,7 @@ const TABS = [
   { to: "/trenches", label: "trenches" },
   { to: "/trade", label: "trade" },
   { to: "/launch", label: "launch" },
+  { to: "/volume", label: "volume" },
   { to: "/trending", label: "trending" },
   { to: "/wallets", label: "wallets" },
 ];

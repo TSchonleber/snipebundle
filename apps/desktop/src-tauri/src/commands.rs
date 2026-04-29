@@ -5,6 +5,7 @@ use snipebundle_core::{
     funding::{self, FanOutResult},
     keystore::{self, Keystore, StoredKeypair},
     launch::{self, LaunchMetadata, LaunchResult},
+    volume::{self, VolumeBotConfig, VolumeBotStatus},
     wallet, Config, Engine, EngineState,
 };
 use std::collections::HashMap;
@@ -824,6 +825,108 @@ pub async fn launch_token(
     spawn_universal_wallet_exits(exit_wallets, result.mint.clone(), cfg, ks);
 
     Ok(result)
+}
+
+#[derive(Deserialize)]
+pub struct StartVolumeSessionArgs {
+    pub config: VolumeBotConfig,
+}
+
+#[derive(Serialize)]
+pub struct VolumeSessionInfo {
+    pub id: String,
+    pub mint: String,
+    pub status: VolumeBotStatus,
+}
+
+#[tauri::command]
+pub async fn start_volume_session(
+    args: StartVolumeSessionArgs,
+    state: State<'_, AppState>,
+) -> Result<String> {
+    let cfg_app = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+
+    let mut wallets: Vec<StoredKeypair> =
+        Vec::with_capacity(args.config.wallet_pubkeys.len());
+    for pk in &args.config.wallet_pubkeys {
+        let kp = find_wallet(&ks, pk)
+            .ok_or_else(|| format!("wallet {pk} not in keystore"))?;
+        wallets.push(kp);
+    }
+
+    let handle = volume::spawn_session(args.config.clone(), wallets, cfg_app.network.clone())
+        .await
+        .map_err(err)?;
+
+    // Session id is mint + nanos suffix — easy to reference across UI
+    // calls without adding a uuid dep.
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let id = format!("{}-{:x}", &args.config.mint[..8.min(args.config.mint.len())], suffix);
+
+    state
+        .volume_sessions
+        .lock()
+        .await
+        .insert(id.clone(), handle);
+    Ok(id)
+}
+
+#[derive(Deserialize)]
+pub struct StopVolumeSessionArgs {
+    pub id: String,
+}
+
+#[tauri::command]
+pub async fn stop_volume_session(
+    args: StopVolumeSessionArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut guard = state.volume_sessions.lock().await;
+    let h = guard
+        .get(&args.id)
+        .ok_or_else(|| format!("no volume session {} active", args.id))?
+        .clone();
+    h.cancel();
+    // Leave the entry in the map for one more snapshot read — the UI
+    // can then call list_volume_sessions and see the final reason
+    // before it disappears. Simple approach: drop after cancel.
+    guard.remove(&args.id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_volume_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<VolumeSessionInfo>> {
+    let guard = state.volume_sessions.lock().await;
+    let mut out = Vec::with_capacity(guard.len());
+    for (id, handle) in guard.iter() {
+        let snap = handle.snapshot().await;
+        // mint isn't tracked on the handle directly; the id starts with
+        // the mint prefix so we surface that. UI can fetch full mint
+        // from the session's last_message if needed.
+        let mint_prefix = id.split('-').next().unwrap_or("?").to_string();
+        out.push(VolumeSessionInfo {
+            id: id.clone(),
+            mint: mint_prefix,
+            status: snap,
+        });
+    }
+    Ok(out)
 }
 
 #[derive(Deserialize)]

@@ -13,6 +13,7 @@ pub mod launch;
 pub mod price_watcher;
 pub mod trending;
 pub mod types;
+pub mod volume;
 
 pub use amounts::AmountStrategy;
 

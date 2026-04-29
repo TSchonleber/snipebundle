@@ -1,4 +1,6 @@
+use snipebundle_core::volume::VolumeBotHandle;
 use snipebundle_core::{keystore::Keystore, Config, Engine, EngineState};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
@@ -8,6 +10,10 @@ pub struct AppState {
     pub config: Mutex<Option<Config>>,
     pub config_path: Mutex<PathBuf>,
     pub engine: Mutex<Option<EngineHandle>>,
+    /// v0.1.55: live volume-bot sessions keyed by their assigned id.
+    /// One handle per session; cancelling it stops the loop and the
+    /// task self-removes from this map on shutdown.
+    pub volume_sessions: Mutex<HashMap<String, Arc<VolumeBotHandle>>>,
 }
 
 pub struct EngineHandle {
@@ -25,6 +31,7 @@ impl AppState {
             config: Mutex::new(None),
             config_path: Mutex::new(cfg_path),
             engine: Mutex::new(None),
+            volume_sessions: Mutex::new(HashMap::new()),
         }
     }
 }
