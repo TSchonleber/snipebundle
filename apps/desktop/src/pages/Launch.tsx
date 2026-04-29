@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Card, CardBody, CardHeader, cn } from "@snipebundle/ui";
 import type { WalletInfo } from "@snipebundle/ui";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -21,6 +21,7 @@ interface LaunchSellTarget {
 
 export function Launch() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<LaunchMode>("single");
   const [devWallets, setDevWallets] = useState<WalletInfo[]>([]);
   const [snipers, setSnipers] = useState<WalletInfo[]>([]);
@@ -193,6 +194,14 @@ export function Launch() {
           console.warn("register_launch_position failed", e);
         }
       }
+
+      // Hand off to the sniper dashboard so the user lands on a view
+      // that's set up for live trade management (positions list, exit
+      // controls, P&L). 1.5s delay so the success banner is visible
+      // before the page swap.
+      window.setTimeout(() => {
+        navigate(`/dashboard?mint=${encodeURIComponent(res.mint)}`);
+      }, 1500);
     } catch (e) {
       setError(String(e));
     } finally {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Button,
@@ -62,6 +63,7 @@ function freshToken(): TokenDraft {
 }
 
 export function MultiLaunchPanel({ devWallets, snipers, onComplete }: Props) {
+  const navigate = useNavigate();
   // Shared defaults applied to any token whose per-token field is empty.
   const [sharedDev, setSharedDev] = useState<string>("");
   const [sharedDevBuy, setSharedDevBuy] = useState("0.5");
@@ -195,6 +197,16 @@ export function MultiLaunchPanel({ devWallets, snipers, onComplete }: Props) {
       const res = await ipc.launchMultipleTokens(built);
       setResults(res);
       onComplete?.();
+      // If at least one token landed, hand off to the sniper dashboard
+      // for trade management — that's where positions list + exit
+      // controls live. 2.5s delay so the per-token result strip is
+      // visible long enough to copy any mints.
+      const landed = res.filter((r) => !r.error);
+      if (landed.length > 0) {
+        window.setTimeout(() => {
+          navigate("/dashboard");
+        }, 2500);
+      }
     } catch (e) {
       setError(String(e));
     } finally {

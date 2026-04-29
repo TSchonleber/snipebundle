@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   cn,
   MintFeedHeader,
@@ -21,11 +22,15 @@ const SECTIONS: { id: Section; label: string }[] = [
 ];
 
 export function Dashboard() {
+  // ?mint=<pk> deep-link from /launch redirect lets a freshly-launched
+  // token drive the chart + active-mint focus the moment the dashboard
+  // mounts, no extra click needed.
+  const [params] = useSearchParams();
   const [state, setState] = useState<EngineState | null>(null);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allWallets, setAllWallets] = useState<WalletInfo[]>([]);
-  const [activeMint, setActiveMint] = useState("");
+  const [activeMint, setActiveMint] = useState(params.get("mint") ?? "");
   const [section, setSection] = useState<Section>("feed");
   const [showSettings, setShowSettings] = useState(false);
   const [showChart, setShowChart] = useState(true);
