@@ -18,6 +18,11 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
+// system_instruction has been moved to the solana_system_interface crate in
+// newer Solana SDKs, but pulling that in is a dependency-graph headache for
+// a single transfer call. Keep the SDK re-export until we do a wider deps
+// refresh.
+#[allow(deprecated)]
 use solana_sdk::system_instruction;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
@@ -62,6 +67,7 @@ pub async fn fan_out_from_master(
     for r in recipients {
         let to = Pubkey::from_str(r).map_err(|e| anyhow!("invalid recipient {r}: {e}"))?;
         anyhow::ensure!(to != master_pub, "recipient {r} is the master wallet");
+        #[allow(deprecated)]
         instructions.push(system_instruction::transfer(&master_pub, &to, lamports_each));
     }
 

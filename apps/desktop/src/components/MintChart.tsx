@@ -58,7 +58,14 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
         if (!data.coin) {
           setUsePumpChart(false);
         } else {
-          setUsePumpChart(data.is_pre_migration);
+          // Even if backend reports pre-migration, a coin at curve 100% /
+          // complete has its post-graduation trades happening on Raydium —
+          // pump.fun's /trades feed won't show them. Fall back to
+          // DexScreener so the chart reflects actual market activity.
+          const graduated =
+            data.coin.complete === true ||
+            (data.coin.bonding_curve_progress_pct ?? 0) >= 99;
+          setUsePumpChart(data.is_pre_migration && !graduated);
         }
       })
       .catch(() => {

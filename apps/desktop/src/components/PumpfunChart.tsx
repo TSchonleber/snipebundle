@@ -66,6 +66,12 @@ export function PumpfunChart({ mint, height }: Props) {
   const [coin, setCoin] = useState<TrenchCoin | null>(null);
   const [trades, setTrades] = useState<PumpTrade[]>([]);
   const [intervalKey, setIntervalKey] = useState<IntervalKey>("5s");
+  // Until the user picks an interval explicitly, snap to whatever bucket
+  // size produces a useful candlestick view for the trade density we
+  // actually have. 1s on a coin with 8 trades over 3 minutes makes every
+  // candle a flat horizontal line; 1m on a 30-second-old launch gives one
+  // giant blob. Auto-fit avoids both.
+  const [intervalAuto, setIntervalAuto] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const intervalSeconds =
     INTERVALS.find((i) => i.key === intervalKey)?.seconds ?? 5;
@@ -128,6 +134,20 @@ export function PumpfunChart({ mint, height }: Props) {
     };
   }, [mint]);
 
+  // ---------------- Auto-pick interval based on data density -----------------
+  useEffect(() => {
+    if (!intervalAuto || trades.length < 2) return;
+    const span =
+      (trades[trades.length - 1].timestamp_ms - trades[0].timestamp_ms) / 1000;
+    let next: IntervalKey;
+    if (span < 60) next = "1s";
+    else if (span < 600) next = "5s";
+    else if (span < 1800) next = "30s";
+    else if (span < 7200) next = "1m";
+    else next = "5m";
+    setIntervalKey((prev) => (prev === next ? prev : next));
+  }, [trades, intervalAuto]);
+
   // ---------------- Bucket trades → candles -----------------
   const candles = useMemo<Candle[]>(
     () => bucketTrades(trades, intervalSeconds),
@@ -156,10 +176,16 @@ export function PumpfunChart({ mint, height }: Props) {
         timeVisible: true,
         secondsVisible: true,
         borderColor: "#1c1d24",
+        // Keep candles at a fixed visual width so a chart with 8 trades
+        // doesn't blow up to 1/8-of-the-screen-wide bars. Lightweight-
+        // charts will scroll horizontally instead — same UX as GMGN.
+        barSpacing: 8,
+        minBarSpacing: 2,
+        rightOffset: 6,
       },
       rightPriceScale: {
         borderColor: "#1c1d24",
-        scaleMargins: { top: 0.1, bottom: 0.28 },
+        scaleMargins: { top: 0.05, bottom: 0.18 },
       },
       crosshair: {
         vertLine: { color: "#2a2c36" },
@@ -184,7 +210,9 @@ export function PumpfunChart({ mint, height }: Props) {
       priceScaleId: "volume",
     });
     chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.78, bottom: 0 },
+      // Volume ribbon ~12% tall (was 22%), pinned to the bottom — matches
+      // GMGN proportions where the price action gets the lion's share.
+      scaleMargins: { top: 0.88, bottom: 0 },
       borderVisible: false,
     });
 
@@ -229,7 +257,11 @@ export function PumpfunChart({ mint, height }: Props) {
             : "rgba(239, 111, 125, 0.4)",
       })),
     );
-    chartRef.current?.timeScale().fitContent();
+    // Don't fitContent — that re-stretches all candles to fill the
+    // viewport and produces the giant-bars effect on sparse data. Scroll
+    // to the right edge so live trades stay visible at the configured
+    // bar width instead.
+    chartRef.current?.timeScale().scrollToRealTime();
   }, [candles]);
 
   // Stat strip at the top
@@ -296,7 +328,10 @@ export function PumpfunChart({ mint, height }: Props) {
               <button
                 key={iv.key}
                 type="button"
-                onClick={() => setIntervalKey(iv.key)}
+                onClick={() => {
+                  setIntervalAuto(false);
+                  setIntervalKey(iv.key);
+                }}
                 className={cn(
                   "font-mono text-2xs px-2 py-0.5 transition-colors border",
                   iv.key === intervalKey
