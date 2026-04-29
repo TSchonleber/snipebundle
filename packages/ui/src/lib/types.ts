@@ -86,7 +86,7 @@ export interface WalletInfo {
    * so UI can show MASTER / SNIPER / DEV badges and offer reassignment
    * without re-querying. Backend never sets this — purely a render hint.
    */
-  role?: "master" | "sniper" | "dev";
+  role?: "master" | "sniper" | "dev" | "volume";
 }
 
 export interface WalletWithSecret extends WalletInfo {

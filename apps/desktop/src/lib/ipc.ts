@@ -363,11 +363,21 @@ export const ipc = {
     invoke<void>("delete_wallet", { args: { pubkey, passphrase } }),
   reassignWalletRole: (
     pubkey: string,
-    targetRole: "sniper" | "dev",
+    targetRole: "sniper" | "dev" | "volume",
     passphrase: string,
   ) =>
     invoke<void>("reassign_wallet_role", {
       args: { pubkey, target_role: targetRole, passphrase },
+    }),
+  listVolumeWallets: () =>
+    invoke<WalletInfo[]>("list_volume_wallets"),
+  createVolumeWallet: (passphrase: string, label?: string) =>
+    invoke<WalletWithSecret>("create_volume_wallet", {
+      args: { passphrase, label },
+    }),
+  importVolumeWallet: (label: string, secretB58: string, passphrase: string) =>
+    invoke<WalletInfo>("import_volume_wallet", {
+      args: { label, secret_b58: secretB58, passphrase },
     }),
   getTrending: () => invoke<TrendingItem[]>("get_trending"),
   getPumpfunBuckets: () =>

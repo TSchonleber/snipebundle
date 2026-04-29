@@ -22,6 +22,10 @@ export function WalletManager({ wallets, onChanged }: Props) {
   const [target, setTarget] = useState<WalletInfo | null>(null);
   const [pass, setPass] = useState("");
   const [label, setLabel] = useState("");
+  /** Which role to mint when mode === "add". Decides which IPC fires. */
+  const [addRole, setAddRole] = useState<"sniper" | "dev" | "volume">(
+    "sniper",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cfg, setCfg] = useState<AppConfig | null>(null);
@@ -61,7 +65,13 @@ export function WalletManager({ wallets, onChanged }: Props) {
     if (pass.length < 12) return setError("Enter your keystore passphrase.");
     setBusy(true);
     try {
-      const w = await ipc.addSniperWallet(pass, label.trim() || undefined);
+      const fn =
+        addRole === "sniper"
+          ? ipc.addSniperWallet
+          : addRole === "dev"
+            ? ipc.createDevWallet
+            : ipc.createVolumeWallet;
+      const w = await fn(pass, label.trim() || undefined);
       setRevealed(w);
       setLabel("");
       setPass("");
@@ -74,7 +84,9 @@ export function WalletManager({ wallets, onChanged }: Props) {
   }
 
   // Target role we're reassigning to. Only meaningful while mode === "reassign".
-  const [reassignTo, setReassignTo] = useState<"sniper" | "dev">("dev");
+  const [reassignTo, setReassignTo] = useState<"sniper" | "dev" | "volume">(
+    "dev",
+  );
 
   async function doReassign() {
     if (!target) return;
@@ -177,28 +189,35 @@ export function WalletManager({ wallets, onChanged }: Props) {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h3 className="font-semibold">Manage wallets</h3>
-          <Button
-            size="sm"
-            onClick={() => {
-              setMode("add");
-              setError(null);
-              setRevealed(null);
-            }}
-            disabled={mode === "add"}
-          >
-            + Add sniper
-          </Button>
+          <div className="flex items-center gap-2">
+            {(["sniper", "dev", "volume"] as const).map((role) => (
+              <Button
+                key={role}
+                size="sm"
+                variant={role === "sniper" ? "primary" : "secondary"}
+                onClick={() => {
+                  setAddRole(role);
+                  setMode("add");
+                  setError(null);
+                  setRevealed(null);
+                }}
+                disabled={mode === "add"}
+              >
+                + {role}
+              </Button>
+            ))}
+          </div>
         </div>
       </CardHeader>
 
       {mode === "add" && !revealed && (
         <CardBody className="space-y-3">
           <p className="text-sm text-fg-muted">
-            Generates a new sniper wallet, saves it to your encrypted keystore
-            in addition to existing ones, and shows you the secret once. Up to
-            50 sniper wallets total in the keystore.
+            Generates a new <strong>{addRole}</strong> wallet, saves it to your
+            encrypted keystore in addition to existing ones, and shows you the
+            secret once. Up to 50 wallets per role.
           </p>
           <Field label="Label (optional, defaults to next sniper-N)">
             <input
@@ -373,9 +392,8 @@ export function WalletManager({ wallets, onChanged }: Props) {
         <ul className="space-y-2">
           {wallets.map((w) => {
             const deletable = w.label !== "master";
-            const reassignable = w.role === "sniper" || w.role === "dev";
-            const otherRole: "sniper" | "dev" =
-              w.role === "dev" ? "sniper" : "dev";
+            const reassignable =
+              w.role === "sniper" || w.role === "dev" || w.role === "volume";
             const custom = Boolean(cfg?.wallet_exit_rules?.[w.pubkey]);
             const draft =
               ruleDrafts[w.pubkey] ??
@@ -395,6 +413,7 @@ export function WalletManager({ wallets, onChanged }: Props) {
                         "rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider font-mono shrink-0",
                         w.role === "master" && "border-warn/50 text-warn",
                         w.role === "dev" && "border-accent/50 text-accent",
+                        w.role === "volume" && "border-purple-400/50 text-purple-400",
                         w.role === "sniper" && "border-border text-fg-subtle",
                       )}
                     >
@@ -408,19 +427,29 @@ export function WalletManager({ wallets, onChanged }: Props) {
                     {custom ? "custom" : "global"}
                   </span>
                   {reassignable && (
-                    <button
-                      onClick={() => {
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const next = e.target.value as "sniper" | "dev" | "volume" | "";
+                        if (!next) return;
                         setMode("reassign");
                         setTarget(w);
-                        setReassignTo(otherRole);
+                        setReassignTo(next);
                         setError(null);
                       }}
-                      className="text-xs text-fg-subtle hover:text-fg-muted px-2 py-1"
                       disabled={mode !== null}
-                      title={`reassign as ${otherRole}`}
+                      className="rounded border border-border bg-bg px-1 py-0.5 font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+                      title="reassign role"
                     >
-                      → {otherRole}
-                    </button>
+                      <option value="">→ role…</option>
+                      {w.role !== "sniper" && (
+                        <option value="sniper">→ sniper</option>
+                      )}
+                      {w.role !== "dev" && <option value="dev">→ dev</option>}
+                      {w.role !== "volume" && (
+                        <option value="volume">→ volume</option>
+                      )}
+                    </select>
                   )}
                   {deletable ? (
                     <button

@@ -34,6 +34,13 @@ pub struct Keystore {
     pub snipers: Vec<StoredKeypair>,
     #[serde(default)]
     pub dev_wallets: Vec<StoredKeypair>,
+    /// v0.1.56: dedicated wallets for the volume bot. Kept separate
+    /// from snipers so you can't accidentally pull a hot sniper into a
+    /// volume session, and so the volume page only sees volume wallets
+    /// in its picker. Reassign moves a wallet between any of the four
+    /// roles (master is fixed and never reassigned).
+    #[serde(default)]
+    pub volume_wallets: Vec<StoredKeypair>,
 }
 
 pub fn keystore_path() -> Result<PathBuf> {

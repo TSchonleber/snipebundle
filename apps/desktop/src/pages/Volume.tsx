@@ -15,20 +15,28 @@ import {
 import { AppNav } from "../components/AppNav";
 
 /**
- * Volume bot page. v0.1.55. Inspired by pumpkit's EZ Mode.
+ * Volume bot page. v0.1.55+ with v0.1.56 role/visualization additions.
  *
- * Configures and starts an automated buy/sell loop on a target mint that
- * generates chart activity, with user-configurable cadence and a set of
- * stop guards (market cap, realized PnL, outsider whale buy, max cycles)
- * that halt the session the moment any threshold is breached.
+ * Only `volume`-role wallets are eligible — keeps hot snipers and dev
+ * wallets from accidentally being sucked into a volume loop and leaving
+ * their identity on-chain. Inline "+ create volume wallet" mints a fresh
+ * keypair, lands it in the volume_wallets pool, and reveals the secret
+ * once. Reassigning sniper/dev wallets to volume is one click on
+ * /wallets > manage.
  *
- * Sessions run in-process on the Rust side; this page is just the UI.
- * Polls listVolumeSessions every 2s while at least one session is live
- * so the user sees status without manual refresh.
+ * Sessions run in-process on the Rust side; this page is just UI.
+ * Polls listVolumeSessions every 1.5s while at least one is live so the
+ * activity chart and per-wallet badges stay fresh without manual refresh.
  */
 export function Volume() {
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
   const [sessions, setSessions] = useState<VolumeSessionInfo[]>([]);
+
+  // Sample buffer for the activity chart — append a snapshot every poll
+  // so we can render a sparkline of cycles, in/out, realized PnL.
+  const samplesRef = useRef<
+    Map<string, { ts: number; cycles: number; in: number; out: number }[]>
+  >(new Map());
 
   // Form state
   const [mint, setMint] = useState("");
@@ -38,14 +46,15 @@ export function Volume() {
   const [buyMin, setBuyMin] = useState("0.02");
   const [buyMax, setBuyMax] = useState("0.10");
   const [sellPct, setSellPct] = useState("100");
-  const [intervalMode, setIntervalMode] = useState<"fixed" | "random">("random");
+  const [intervalMode, setIntervalMode] = useState<"fixed" | "random">(
+    "random",
+  );
   const [intervalFixed, setIntervalFixed] = useState("5");
   const [intervalMin, setIntervalMin] = useState("3");
   const [intervalMax, setIntervalMax] = useState("8");
   const [gapEnabled, setGapEnabled] = useState(true);
   const [gapFixed, setGapFixed] = useState("2");
 
-  // Stop guards
   const [mcMaxSolEnabled, setMcMaxSolEnabled] = useState(false);
   const [mcMaxSol, setMcMaxSol] = useState("100");
   const [mcMinSolEnabled, setMcMinSolEnabled] = useState(false);
@@ -63,32 +72,61 @@ export function Volume() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Inline wallet creation state.
+  const [newWalletPass, setNewWalletPass] = useState("");
+  const [newWalletLabel, setNewWalletLabel] = useState("");
+  const [newWalletReveal, setNewWalletReveal] = useState<{
+    label: string;
+    pubkey: string;
+    secret_b58: string;
+  } | null>(null);
+  const [newWalletBusy, setNewWalletBusy] = useState(false);
+  const [newWalletErr, setNewWalletErr] = useState<string | null>(null);
+
+  async function refreshWallets() {
+    try {
+      const list = await ipc.listVolumeWallets();
+      setWallets(list);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   useEffect(() => {
-    Promise.all([ipc.listWallets(), ipc.listDevWallets().catch(() => [] as WalletInfo[])])
-      .then(([base, devs]) => setWallets([...base, ...devs]))
-      .catch((e) => setError(String(e)));
+    refreshWallets();
   }, []);
 
-  // Poll sessions while any are live. Backs off when there are no
-  // sessions so we don't hammer IPC for nothing.
-  const pollIntervalRef = useRef<number | null>(null);
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
         const list = await ipc.listVolumeSessions();
-        if (!cancelled) setSessions(list);
+        if (cancelled) return;
+        setSessions(list);
+        // Append samples for chart rendering.
+        const now = Date.now();
+        for (const s of list) {
+          const arr = samplesRef.current.get(s.id) ?? [];
+          arr.push({
+            ts: now,
+            cycles: s.status.cycles_completed,
+            in: s.status.session_sol_in,
+            out: s.status.session_sol_out,
+          });
+          // Keep last 200 samples per session so the sparkline stays
+          // bounded and we don't leak memory across long sessions.
+          while (arr.length > 200) arr.shift();
+          samplesRef.current.set(s.id, arr);
+        }
       } catch {
         /* ignore */
       }
     };
     tick();
-    pollIntervalRef.current = window.setInterval(tick, 2000);
+    const id = window.setInterval(tick, 1500);
     return () => {
       cancelled = true;
-      if (pollIntervalRef.current) {
-        window.clearInterval(pollIntervalRef.current);
-      }
+      window.clearInterval(id);
     };
   }, []);
 
@@ -101,10 +139,33 @@ export function Volume() {
     });
   }
 
+  async function createWallet() {
+    setNewWalletErr(null);
+    if (newWalletPass.length < 12) {
+      return setNewWalletErr("Enter your keystore passphrase.");
+    }
+    setNewWalletBusy(true);
+    try {
+      const w = await ipc.createVolumeWallet(
+        newWalletPass,
+        newWalletLabel.trim() || undefined,
+      );
+      setNewWalletReveal(w);
+      setNewWalletLabel("");
+      setNewWalletPass("");
+      await refreshWallets();
+    } catch (e) {
+      setNewWalletErr(String(e));
+    } finally {
+      setNewWalletBusy(false);
+    }
+  }
+
   function buildConfig(): VolumeBotConfig | string {
     const trimmed = mint.trim();
     if (!trimmed) return "Mint required.";
-    if (pickedWallets.size === 0) return "Pick at least one wallet.";
+    if (pickedWallets.size === 0)
+      return "Pick at least one volume wallet — or create one below.";
 
     let buyAmount: VolumeBotConfig["buy_amount"];
     if (buyMode === "uniform") {
@@ -151,7 +212,8 @@ export function Volume() {
     if (mcMinSolEnabled) guards.market_cap_min_sol = parseFloat(mcMinSol);
     if (tpEnabled) guards.pnl_take_profit_sol = parseFloat(tpSol);
     if (slEnabled) guards.pnl_stop_loss_sol = parseFloat(slSol);
-    if (outsiderEnabled) guards.outsider_buy_min_sol = parseFloat(outsiderMinSol);
+    if (outsiderEnabled)
+      guards.outsider_buy_min_sol = parseFloat(outsiderMinSol);
     if (maxCyclesEnabled) guards.max_cycles = parseInt(maxCycles, 10);
 
     return {
@@ -172,11 +234,9 @@ export function Volume() {
     if (typeof cfg === "string") return setError(cfg);
     setBusy(true);
     try {
-      const id = await ipc.startVolumeSession(cfg);
+      await ipc.startVolumeSession(cfg);
       const list = await ipc.listVolumeSessions();
       setSessions(list);
-      // eslint-disable-next-line no-console
-      console.log("volume session started", id);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -200,7 +260,8 @@ export function Volume() {
         <div className="flex items-baseline gap-3 border-b border-border pb-3 mb-5">
           <h1 className="font-mono text-base text-fg">volume</h1>
           <span className="font-mono text-2xs text-fg-subtle">
-            // automated buy/sell loop · stop guards · cycle wallets through a target mint
+            // automated buy/sell loop · stop guards · cycle volume wallets
+            through a target mint
           </span>
         </div>
 
@@ -209,7 +270,13 @@ export function Volume() {
             {/* Target & wallets */}
             <Card>
               <CardHeader>
-                <h2 className="font-semibold">Target</h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold">Target & wallets</h2>
+                  <span className="font-mono text-2xs text-purple-400">
+                    {wallets.length} volume wallet
+                    {wallets.length === 1 ? "" : "s"}
+                  </span>
+                </div>
               </CardHeader>
               <CardBody className="space-y-3">
                 <input
@@ -220,35 +287,111 @@ export function Volume() {
                   spellCheck={false}
                   className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                 />
-                <div>
-                  <div className="mb-1.5 text-xs text-fg-subtle uppercase tracking-wider">
-                    Wallets ({pickedWallets.size} picked)
+                {wallets.length === 0 ? (
+                  <div className="hatch border border-dashed border-border px-4 py-6 text-center font-mono text-2xs text-fg-subtle">
+                    no volume wallets yet — create one below or reassign a
+                    sniper/dev to volume on{" "}
+                    <span className="text-fg-muted">/wallets &gt; manage</span>
                   </div>
-                  <div className="max-h-48 overflow-y-auto rounded border border-border bg-bg divide-y divide-border/40">
-                    {wallets.map((w) => {
-                      const checked = pickedWallets.has(w.pubkey);
-                      return (
-                        <label
-                          key={w.pubkey}
-                          className="flex items-center gap-3 px-3 py-1.5 cursor-pointer hover:bg-fg/5"
+                ) : (
+                  <div>
+                    <div className="mb-1.5 text-xs text-fg-subtle uppercase tracking-wider">
+                      Pick wallets ({pickedWallets.size} of {wallets.length})
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded border border-border bg-bg divide-y divide-border/40">
+                      {wallets.map((w) => {
+                        const checked = pickedWallets.has(w.pubkey);
+                        return (
+                          <label
+                            key={w.pubkey}
+                            className="flex items-center gap-3 px-3 py-1.5 cursor-pointer hover:bg-fg/5"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleWallet(w.pubkey)}
+                              className="h-3.5 w-3.5 accent-accent"
+                            />
+                            <span className="font-mono text-2xs text-fg shrink-0 w-20 truncate">
+                              {w.label}
+                            </span>
+                            <span className="font-mono text-[9px] uppercase tracking-wider text-purple-400 shrink-0">
+                              vol
+                            </span>
+                            <span className="font-mono text-2xs text-fg-subtle truncate">
+                              {w.pubkey.slice(0, 10)}…{w.pubkey.slice(-6)}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline wallet creation */}
+                <details className="rounded-lg border border-border bg-bg-raised p-3">
+                  <summary className="cursor-pointer font-mono text-2xs text-fg-subtle hover:text-fg-muted">
+                    + create volume wallet
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    {newWalletReveal ? (
+                      <div className="rounded border border-accent/40 bg-accent/5 p-3">
+                        <div className="text-sm font-semibold text-accent">
+                          ✓ {newWalletReveal.label} created — save the secret
+                          NOW
+                        </div>
+                        <div className="mt-2 text-xs text-fg-subtle">
+                          public
+                        </div>
+                        <code className="block break-all font-mono text-2xs">
+                          {newWalletReveal.pubkey}
+                        </code>
+                        <div className="mt-2 text-xs text-fg-subtle">
+                          secret (one-time)
+                        </div>
+                        <code className="block break-all font-mono text-2xs text-warn">
+                          {newWalletReveal.secret_b58}
+                        </code>
+                        <Button
+                          size="sm"
+                          className="mt-2"
+                          onClick={() => setNewWalletReveal(null)}
                         >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleWallet(w.pubkey)}
-                            className="h-3.5 w-3.5 accent-accent"
-                          />
-                          <span className="font-mono text-2xs text-fg shrink-0 w-20 truncate">
-                            {w.label}
-                          </span>
-                          <span className="font-mono text-2xs text-fg-subtle truncate">
-                            {w.pubkey.slice(0, 10)}…{w.pubkey.slice(-6)}
-                          </span>
-                        </label>
-                      );
-                    })}
+                          I saved it
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          type="text"
+                          value={newWalletLabel}
+                          onChange={(e) => setNewWalletLabel(e.target.value)}
+                          placeholder="label (optional, e.g. vol-3)"
+                          className="w-full rounded border border-border bg-bg px-2 py-1.5 font-mono text-2xs focus:outline-none focus:ring-2 focus:ring-accent"
+                        />
+                        <input
+                          type="password"
+                          value={newWalletPass}
+                          onChange={(e) => setNewWalletPass(e.target.value)}
+                          placeholder="keystore passphrase"
+                          className="w-full rounded border border-border bg-bg px-2 py-1.5 font-mono text-2xs focus:outline-none focus:ring-2 focus:ring-accent"
+                        />
+                        {newWalletErr && (
+                          <div className="rounded border border-danger/40 bg-danger/10 p-2 text-2xs text-danger">
+                            {newWalletErr}
+                          </div>
+                        )}
+                        <Button
+                          size="sm"
+                          onClick={createWallet}
+                          disabled={newWalletBusy}
+                        >
+                          {newWalletBusy ? "Generating…" : "Generate + save"}
+                        </Button>
+                      </>
+                    )}
                   </div>
-                </div>
+                </details>
               </CardBody>
             </Card>
 
@@ -321,10 +464,6 @@ export function Volume() {
                     onChange={(e) => setSellPct(e.target.value)}
                     className="w-full rounded border border-border bg-bg px-2 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                   />
-                  <p className="mt-1 font-mono text-2xs text-fg-subtle">
-                    What percent of the wallet's holdings to dump each cycle.
-                    100 = full round-trip; lower bias = direction (e.g. 80 sells less than the buy).
-                  </p>
                 </div>
 
                 <div>
@@ -386,9 +525,8 @@ export function Volume() {
                       onChange={(e) => setGapEnabled(e.target.checked)}
                       className="h-3.5 w-3.5 accent-accent"
                     />
-                    <span className="text-sm font-semibold">Buy → sell gap</span>
-                    <span className="font-mono text-2xs text-fg-subtle">
-                      // delay so the buy confirms before the sell fires
+                    <span className="text-sm font-semibold">
+                      Buy → sell gap
                     </span>
                   </label>
                   {gapEnabled && (
@@ -405,17 +543,11 @@ export function Volume() {
               </CardBody>
             </Card>
 
-            {/* Stop guards */}
             <Card>
               <CardHeader>
                 <h2 className="font-semibold">Stop guards</h2>
               </CardHeader>
               <CardBody className="space-y-3">
-                <p className="text-sm text-fg-muted">
-                  Session halts the moment any active guard's threshold is
-                  breached. Inactive guards are ignored.
-                </p>
-
                 <Guard
                   enabled={mcMaxSolEnabled}
                   setEnabled={setMcMaxSolEnabled}
@@ -473,9 +605,6 @@ export function Volume() {
                     className="h-3.5 w-3.5 accent-accent"
                   />
                   <span className="text-sm font-semibold">Sell on stop</span>
-                  <span className="font-mono text-2xs text-fg-subtle">
-                    // dump 100% across all session wallets when a guard trips
-                  </span>
                 </label>
               </CardBody>
             </Card>
@@ -502,13 +631,17 @@ export function Volume() {
                     no sessions running
                   </div>
                 ) : (
-                  sessions.map((s) => (
-                    <SessionRow
-                      key={s.id}
-                      session={s}
-                      onStop={() => stopSession(s.id)}
-                    />
-                  ))
+                  sessions.map((s) => {
+                    const series = samplesRef.current.get(s.id) ?? [];
+                    return (
+                      <SessionRow
+                        key={s.id}
+                        session={s}
+                        series={series}
+                        onStop={() => stopSession(s.id)}
+                      />
+                    );
+                  })
                 )}
               </CardBody>
             </Card>
@@ -562,9 +695,11 @@ function Guard({
 
 function SessionRow({
   session,
+  series,
   onStop,
 }: {
   session: VolumeSessionInfo;
+  series: { ts: number; cycles: number; in: number; out: number }[];
   onStop: () => void;
 }) {
   const s = session.status;
@@ -572,8 +707,10 @@ function SessionRow({
   return (
     <div
       className={cn(
-        "rounded border px-3 py-2 space-y-1",
-        s.running ? "border-accent/40 bg-accent/5" : "border-border bg-bg-raised",
+        "rounded border px-3 py-2 space-y-1.5",
+        s.running
+          ? "border-accent/40 bg-accent/5"
+          : "border-border bg-bg-raised",
       )}
     >
       <div className="flex items-center justify-between">
@@ -590,9 +727,16 @@ function SessionRow({
           </button>
         )}
       </div>
-      <div className="font-mono text-2xs text-fg-subtle">
+      <div className="font-mono text-2xs text-fg-subtle truncate">
         {s.last_message}
       </div>
+
+      {/* Live mini-chart of session activity over time. Two series: the
+          PnL curve (realized SOL out − in) on the value axis and a
+          cycle-count tick. The component renders a tiny SVG inline; no
+          chart lib needed for a 12-line sparkline. */}
+      <Sparkline series={series} />
+
       <div className="grid grid-cols-3 gap-2 font-mono text-[10px] text-fg-subtle">
         <span>cycles {s.cycles_completed}</span>
         <span>buys {s.buys_submitted}</span>
@@ -608,7 +752,9 @@ function SessionRow({
           pnl {realized >= 0 ? "+" : ""}
           {realized.toFixed(3)}
         </span>
-        {s.current_mc_sol != null && <span>mc {s.current_mc_sol.toFixed(2)}</span>}
+        {s.current_mc_sol != null && (
+          <span>mc {s.current_mc_sol.toFixed(2)}</span>
+        )}
         {s.failures > 0 && <span className="text-warn">fail {s.failures}</span>}
       </div>
       {s.stop_reason && (
@@ -617,5 +763,65 @@ function SessionRow({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Tiny inline-SVG sparkline of realized PnL across session samples.
+ * Two parallel series visible: the PnL curve in accent or danger color
+ * depending on direction, and a low-vis cycle-count tick row underneath.
+ */
+function Sparkline({
+  series,
+}: {
+  series: { ts: number; cycles: number; in: number; out: number }[];
+}) {
+  const W = 280;
+  const H = 36;
+  const pad = 2;
+
+  const points = useMemo(() => {
+    if (series.length < 2) return [] as { x: number; y: number; pnl: number }[];
+    const pnls = series.map((s) => s.out - s.in);
+    const minP = Math.min(0, ...pnls);
+    const maxP = Math.max(0, ...pnls);
+    const range = maxP - minP || 1;
+    return series.map((s, i) => {
+      const x = pad + (i / Math.max(1, series.length - 1)) * (W - pad * 2);
+      const pnl = s.out - s.in;
+      const yNorm = (pnl - minP) / range;
+      const y = H - pad - yNorm * (H - pad * 2);
+      return { x, y, pnl };
+    });
+  }, [series]);
+
+  if (points.length < 2) {
+    return (
+      <div className="flex h-9 items-center justify-center font-mono text-[10px] text-fg-subtle/60">
+        gathering samples…
+      </div>
+    );
+  }
+
+  const lastPnl = points[points.length - 1].pnl;
+  const stroke = lastPnl >= 0 ? "rgb(95, 227, 154)" : "rgb(239, 111, 125)";
+  const fill = lastPnl >= 0 ? "rgba(95, 227, 154, 0.1)" : "rgba(239, 111, 125, 0.1)";
+  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const area =
+    `M${points[0].x},${H - pad} ` +
+    points.map((p) => `L${p.x},${p.y}`).join(" ") +
+    ` L${points[points.length - 1].x},${H - pad} Z`;
+
+  return (
+    <svg
+      width="100%"
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      className="rounded bg-bg/60"
+    >
+      <path d={area} fill={fill} />
+      <path d={path} fill="none" stroke={stroke} strokeWidth={1.25} />
+    </svg>
   );
 }

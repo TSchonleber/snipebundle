@@ -79,6 +79,7 @@ pub async fn init_keystore(
         master: Some(master.clone()),
         snipers: snipers.clone(),
         dev_wallets: Vec::new(),
+        volume_wallets: Vec::new(),
     };
     keystore::save(&path, &ks, &args.passphrase).map_err(err)?;
 
@@ -561,10 +562,13 @@ pub async fn delete_wallet(
             );
         }
     }
-    let before = ks.snipers.len() + ks.dev_wallets.len();
+    let before =
+        ks.snipers.len() + ks.dev_wallets.len() + ks.volume_wallets.len();
     ks.snipers.retain(|w| w.pubkey != args.pubkey);
     ks.dev_wallets.retain(|w| w.pubkey != args.pubkey);
-    let after = ks.snipers.len() + ks.dev_wallets.len();
+    ks.volume_wallets.retain(|w| w.pubkey != args.pubkey);
+    let after =
+        ks.snipers.len() + ks.dev_wallets.len() + ks.volume_wallets.len();
     if before == after {
         return Err(format!("no wallet with pubkey {} in keystore", args.pubkey));
     }
@@ -602,9 +606,9 @@ pub async fn reassign_wallet_role(
     state: State<'_, AppState>,
 ) -> Result<()> {
     let target = args.target_role.as_str();
-    if !matches!(target, "sniper" | "dev") {
+    if !matches!(target, "sniper" | "dev" | "volume") {
         return Err(format!(
-            "target_role must be 'sniper' or 'dev' (got '{}')",
+            "target_role must be 'sniper', 'dev', or 'volume' (got '{}')",
             args.target_role
         ));
     }
@@ -632,6 +636,9 @@ pub async fn reassign_wallet_role(
     } else if let Some(idx) = ks.dev_wallets.iter().position(|w| w.pubkey == args.pubkey) {
         moved = Some(ks.dev_wallets.remove(idx));
         from_role = "dev";
+    } else if let Some(idx) = ks.volume_wallets.iter().position(|w| w.pubkey == args.pubkey) {
+        moved = Some(ks.volume_wallets.remove(idx));
+        from_role = "volume";
     }
 
     let kp = moved.ok_or_else(|| format!("no wallet with pubkey {} in keystore", args.pubkey))?;
@@ -641,6 +648,7 @@ pub async fn reassign_wallet_role(
         match target {
             "sniper" => ks.snipers.push(kp),
             "dev" => ks.dev_wallets.push(kp),
+            "volume" => ks.volume_wallets.push(kp),
             _ => unreachable!(),
         }
         return Err(format!("wallet is already a {target} wallet"));
@@ -649,6 +657,7 @@ pub async fn reassign_wallet_role(
     match target {
         "sniper" => ks.snipers.push(kp),
         "dev" => ks.dev_wallets.push(kp),
+        "volume" => ks.volume_wallets.push(kp),
         _ => unreachable!(),
     }
 
@@ -745,6 +754,98 @@ pub async fn import_dev_wallet(
     }
     ks.dev_wallets.push(stored);
 
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(info)
+}
+
+#[tauri::command]
+pub async fn list_volume_wallets(state: State<'_, AppState>) -> Result<Vec<WalletInfo>> {
+    let guard = state.keystore.lock().await;
+    let ks = guard.as_ref().ok_or("keystore locked")?;
+    Ok(ks
+        .volume_wallets
+        .iter()
+        .map(|w| WalletInfo {
+            label: w.label.clone(),
+            pubkey: w.pubkey.clone(),
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+pub struct CreateVolumeArgs {
+    pub passphrase: String,
+    pub label: Option<String>,
+}
+
+/// Mint a fresh volume-bot wallet. Mirrors create_dev_wallet but lands
+/// the new keypair in the volume_wallets pool — the volume page can
+/// only pick wallets from this pool, so this is the natural entry
+/// point for spinning up a new volume-only wallet inline.
+#[tauri::command]
+pub async fn create_volume_wallet(
+    args: CreateVolumeArgs,
+    state: State<'_, AppState>,
+) -> Result<WalletWithSecret> {
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if ks.volume_wallets.len() >= 50 {
+        return Err("volume wallet cap reached (50)".into());
+    }
+    let label = args.label.unwrap_or_else(|| {
+        let mut i = ks.volume_wallets.len();
+        loop {
+            let candidate = format!("vol-{i}");
+            if ks.volume_wallets.iter().all(|w| w.label != candidate) {
+                return candidate;
+            }
+            i += 1;
+        }
+    });
+    let stored = wallet::generate(&label);
+    let result = WalletWithSecret {
+        label: stored.label.clone(),
+        pubkey: stored.pubkey.clone(),
+        secret_b58: stored.secret_b58.clone(),
+    };
+    ks.volume_wallets.push(stored);
+    let path = keystore::keystore_path().map_err(err)?;
+    keystore::save(&path, ks, &args.passphrase).map_err(err)?;
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+pub struct ImportVolumeArgs {
+    pub label: String,
+    pub secret_b58: String,
+    pub passphrase: String,
+}
+
+#[tauri::command]
+pub async fn import_volume_wallet(
+    args: ImportVolumeArgs,
+    state: State<'_, AppState>,
+) -> Result<WalletInfo> {
+    let stored = wallet::from_b58_secret(&args.label, &args.secret_b58).map_err(err)?;
+    let info = WalletInfo {
+        label: stored.label.clone(),
+        pubkey: stored.pubkey.clone(),
+    };
+    let mut guard = state.keystore.lock().await;
+    let ks = guard.as_mut().ok_or("keystore locked")?;
+    if ks.volume_wallets.iter().any(|w| w.pubkey == stored.pubkey)
+        || ks.snipers.iter().any(|w| w.pubkey == stored.pubkey)
+        || ks.dev_wallets.iter().any(|w| w.pubkey == stored.pubkey)
+        || ks
+            .master
+            .as_ref()
+            .map(|m| m.pubkey == stored.pubkey)
+            .unwrap_or(false)
+    {
+        return Err("a wallet with that pubkey is already in the keystore".into());
+    }
+    ks.volume_wallets.push(stored);
     let path = keystore::keystore_path().map_err(err)?;
     keystore::save(&path, ks, &args.passphrase).map_err(err)?;
     Ok(info)
@@ -860,6 +961,15 @@ pub async fn start_volume_session(
     let mut wallets: Vec<StoredKeypair> =
         Vec::with_capacity(args.config.wallet_pubkeys.len());
     for pk in &args.config.wallet_pubkeys {
+        // Volume sessions only accept volume-role wallets — keeps the
+        // user from accidentally pulling a hot sniper or dev into a
+        // volume loop and leaving its identity on-chain.
+        let is_volume = ks.volume_wallets.iter().any(|w| &w.pubkey == pk);
+        if !is_volume {
+            return Err(format!(
+                "wallet {pk} is not a volume wallet — reassign it on /wallets > manage first"
+            ));
+        }
         let kp = find_wallet(&ks, pk)
             .ok_or_else(|| format!("wallet {pk} not in keystore"))?;
         wallets.push(kp);
@@ -1287,6 +1397,7 @@ fn find_wallet(ks: &Keystore, pubkey: &str) -> Option<StoredKeypair> {
     ks.snipers
         .iter()
         .chain(ks.dev_wallets.iter())
+        .chain(ks.volume_wallets.iter())
         .find(|w| w.pubkey == pubkey)
         .cloned()
 }

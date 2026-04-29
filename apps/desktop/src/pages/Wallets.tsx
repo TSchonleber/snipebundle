@@ -33,9 +33,10 @@ export function Wallets() {
 
   const load = useCallback(async () => {
     try {
-      const [base, devs, cfg] = await Promise.all([
+      const [base, devs, vols, cfg] = await Promise.all([
         ipc.listWallets(),
         ipc.listDevWallets().catch(() => [] as WalletInfo[]),
+        ipc.listVolumeWallets().catch(() => [] as WalletInfo[]),
         ipc.loadConfig().catch(() => null),
       ]);
       // Tag each wallet with its role so downstream components can show
@@ -48,6 +49,7 @@ export function Wallets() {
           }),
         ),
         ...devs.map((w): WalletInfo => ({ ...w, role: "dev" })),
+        ...vols.map((w): WalletInfo => ({ ...w, role: "volume" })),
       ];
       setWallets(tagged);
       setMaster(base.find((w) => w.label === "master") ?? null);
