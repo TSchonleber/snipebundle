@@ -50,6 +50,7 @@ export interface TrenchCoin {
   virtual_token_reserves: number | null;
   bonding_curve_progress_pct: number | null;
   complete: boolean | null;
+  is_currently_live: boolean | null;
   raydium_pool: string | null;
   twitter: string | null;
   telegram: string | null;

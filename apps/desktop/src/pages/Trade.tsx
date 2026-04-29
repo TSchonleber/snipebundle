@@ -168,8 +168,8 @@ export function Trade() {
           </span>
         </div>
 
-        <div className="mb-5">
-          <MintChart mint={mint} height={340} onMintChange={setMint} />
+        <div className="mb-4">
+          <MintChart mint={mint} height={440} onMintChange={setMint} />
         </div>
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">

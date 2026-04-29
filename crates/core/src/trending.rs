@@ -664,6 +664,9 @@ pub struct TrenchCoin {
     pub virtual_token_reserves: Option<f64>,
     pub bonding_curve_progress_pct: Option<f64>,
     pub complete: Option<bool>,
+    /// Pump.fun "live streaming" flag — token's creator is currently broadcasting.
+    /// Surfaced as a LIVE badge in the trenches columns.
+    pub is_currently_live: Option<bool>,
     pub raydium_pool: Option<String>,
     pub twitter: Option<String>,
     pub telegram: Option<String>,
@@ -766,6 +769,10 @@ async fn fetch_pumpfun_endpoint(url: &str) -> Result<Vec<TrenchCoin>> {
             virtual_token_reserves: virtual_tok,
             bonding_curve_progress_pct,
             complete: c.get("complete").and_then(|x| x.as_bool()),
+            is_currently_live: c
+                .get("is_currently_live")
+                .and_then(|x| x.as_bool())
+                .or_else(|| c.get("currently_live").and_then(|x| x.as_bool())),
             raydium_pool: c
                 .get("raydium_pool")
                 .and_then(|x| x.as_str())

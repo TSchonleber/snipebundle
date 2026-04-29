@@ -1,14 +1,16 @@
 import { NavLink } from "react-router-dom";
 import { cn, StatusBadge } from "@snipebundle/ui";
+import { PrimaryWalletPicker } from "./PrimaryWalletPicker";
 
 interface AppNavProps {
   status: "live" | "paused" | "stopped";
 }
 
+// /chart is intentionally absent — the unified Trade page hosts the chart
+// now. The /chart route still works for back-compat / direct deep-links.
 const TABS = [
   { to: "/dashboard", label: "sniper" },
   { to: "/trenches", label: "trenches" },
-  { to: "/chart", label: "chart" },
   { to: "/trade", label: "trade" },
   { to: "/launch", label: "launch" },
   { to: "/trending", label: "trending" },
@@ -18,7 +20,7 @@ const TABS = [
 export function AppNav({ status }: AppNavProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-border/80 bg-bg/95 backdrop-blur">
-      <div className="mx-auto flex h-12 max-w-6xl items-center justify-between px-5">
+      <div className="mx-auto flex h-12 max-w-[1600px] items-center justify-between px-5 gap-3">
         <div className="flex items-center gap-7">
           <BrandMark />
           <nav className="flex items-center">
@@ -42,7 +44,10 @@ export function AppNav({ status }: AppNavProps) {
             ))}
           </nav>
         </div>
-        <StatusBadge status={status} />
+        <div className="flex items-center gap-3">
+          <PrimaryWalletPicker />
+          <StatusBadge status={status} />
+        </div>
       </div>
     </header>
   );
