@@ -145,15 +145,22 @@ export function PumpfunChart({ mint, height }: Props) {
   }, [mint]);
 
   // ---------------- Auto-pick interval based on data density -----------------
+  // Target ~5 trades per candle so OHLC actually has a body — single-trade
+  // buckets render as flat horizontal lines because open=close=high=low.
+  // Picking purely by timespan was wrong: a fresh coin with 20 trades in
+  // 30s defaulted to 1s buckets, producing 20 invisible candles instead
+  // of 6 readable 5s ones.
   useEffect(() => {
     if (!intervalAuto || trades.length < 2) return;
     const span =
       (trades[trades.length - 1].timestamp_ms - trades[0].timestamp_ms) / 1000;
+    if (span <= 0) return;
+    const idealSec = (5 * span) / trades.length;
     let next: IntervalKey;
-    if (span < 60) next = "1s";
-    else if (span < 600) next = "5s";
-    else if (span < 1800) next = "30s";
-    else if (span < 7200) next = "1m";
+    if (idealSec <= 2) next = "1s";
+    else if (idealSec <= 10) next = "5s";
+    else if (idealSec <= 60) next = "30s";
+    else if (idealSec <= 300) next = "1m";
     else next = "5m";
     setIntervalKey((prev) => (prev === next ? prev : next));
   }, [trades, intervalAuto]);
@@ -289,15 +296,27 @@ export function PumpfunChart({ mint, height }: Props) {
             : "rgba(239, 111, 125, 0.4)",
       })),
     );
-    // Stay pinned to the right edge for live updates. Auto-fit the very
-    // first time data arrives so the user sees the whole history at once
-    // without needing to wheel-zoom out manually.
+    // Stay pinned to the right edge for live updates. On first load show
+    // the whole seeded history at a sane density.
     const timeScale = chartRef.current?.timeScale();
     if (!hasFittedRef.current && candles.length > 1) {
       timeScale?.fitContent();
       hasFittedRef.current = true;
     } else {
       timeScale?.scrollToRealTime();
+    }
+  }, [candles]);
+
+  // fitContent stretches a sparse coin's 10-15 candles across the entire
+  // canvas — each candle becomes huge, the chart feels "zoomed in", and
+  // there's no headroom for the latest trades. After every data refresh
+  // clamp the bar width so candles stay readable at GMGN-like density.
+  useEffect(() => {
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+    const opts = ts.options();
+    if (opts.barSpacing && opts.barSpacing > 24) {
+      ts.applyOptions({ barSpacing: 14 });
     }
   }, [candles]);
 
