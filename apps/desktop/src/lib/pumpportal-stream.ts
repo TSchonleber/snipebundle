@@ -156,6 +156,36 @@ export function onConnectivityChange(
   };
 }
 
+// Diagnostic: counts of each event kind plus unknown messages, exposed so
+// the Trenches header can show 'X new / Y mig / Z trade / U unknown' for
+// debugging. Bumps on every parsed message; consumers don't need to read
+// these but they're handy when wiring is wrong.
+export const streamCounters = {
+  new_token: 0,
+  migration: 0,
+  token_trade: 0,
+  unknown: 0,
+  total: 0,
+  lastUnknown: null as null | { snippet: string; at: number },
+};
+
+function bumpCounter(kind: keyof typeof streamCounters | "unknown") {
+  streamCounters.total++;
+  if (kind === "new_token") streamCounters.new_token++;
+  else if (kind === "migration") streamCounters.migration++;
+  else if (kind === "token_trade") streamCounters.token_trade++;
+  else streamCounters.unknown++;
+  for (const cb of counterListeners) cb();
+}
+
+const counterListeners = new Set<() => void>();
+export function onCountersChange(cb: () => void): () => void {
+  counterListeners.add(cb);
+  return () => {
+    counterListeners.delete(cb);
+  };
+}
+
 function handleMessage(raw: any) {
   let msg: any;
   try {
@@ -163,22 +193,55 @@ function handleMessage(raw: any) {
   } catch {
     return;
   }
-  // PumpPortal's messages don't include a `kind` field — we infer from
-  // the shape. Trade events have txType + mint; new-token events have
-  // mint + name + creator (often) and lack txType; migration events
-  // include either `pool` field or a top-level migration marker.
-  // Heartbeats / ack messages get filtered out by the lack of mint.
   if (typeof msg !== "object" || !msg) return;
+
+  // Subscription acks land here without a `mint` — looks like
+  // {"message":"Successfully subscribed ..."}. Just ignore.
   const mint = msg.mint;
   if (typeof mint !== "string") return;
 
   const now = Date.now();
-  if (msg.txType) {
+  // Order matters. PumpPortal's NEW TOKEN events have BOTH `txType: "create"`
+  // AND a `name`/`symbol` payload. If we routed by `txType` first the
+  // creates would land in the trade branch and never reach the new-token
+  // listeners. Detect creates explicitly first.
+  const txType = String(msg.txType ?? "").toLowerCase();
+
+  if (txType === "create" || msg.name != null || msg.symbol != null) {
+    const ev: NewTokenEvent = {
+      kind: "new_token",
+      mint,
+      name: optString(msg.name),
+      symbol: optString(msg.symbol),
+      image_uri:
+        optString(msg.imageUri) ??
+        optString(msg.image_uri) ??
+        optString(msg.image),
+      description: optString(msg.description),
+      creator: optString(msg.creator) ?? optString(msg.traderPublicKey),
+      initial_buy_sol: optNumber(msg.initialBuy ?? msg.solAmount),
+      pool: optString(msg.pool),
+      v_sol_in_curve: optNumber(msg.vSolInBondingCurve),
+      v_tokens_in_curve: optNumber(msg.vTokensInBondingCurve),
+      market_cap_sol: optNumber(msg.marketCapSol),
+      uri: optString(msg.uri),
+      twitter: optString(msg.twitter),
+      telegram: optString(msg.telegram),
+      website: optString(msg.website),
+      received_at_ms: now,
+      raw: msg,
+    };
+    bumpCounter("new_token");
+    fanout(ev);
+    return;
+  }
+
+  if (txType === "buy" || txType === "sell") {
     const ev: TokenTradeEvent = {
       kind: "token_trade",
       mint,
-      trader: msg.traderPublicKey ?? msg.trader ?? undefined,
-      tx_type: String(msg.txType).toLowerCase() === "sell" ? "sell" : "buy",
+      trader: optString(msg.traderPublicKey) ?? optString(msg.trader),
+      tx_type: txType === "sell" ? "sell" : "buy",
       sol_amount: Number(msg.solAmount) || 0,
       token_amount: Number(msg.tokenAmount) || 0,
       v_sol_in_curve: optNumber(msg.vSolInBondingCurve),
@@ -187,48 +250,44 @@ function handleMessage(raw: any) {
       received_at_ms: now,
       raw: msg,
     };
+    bumpCounter("token_trade");
     fanout(ev);
     return;
   }
-  // Migrations have a `txType=create` or `migration` marker on some
-  // schemas; the most reliable signal we've seen is `migration: true` or
-  // the message landing on the migration topic. Fall through to new_token
-  // otherwise — token-creation events typically include `name` + `symbol`.
-  if (msg.migration === true || msg.event === "migration") {
+
+  if (
+    txType === "migrate" ||
+    msg.migration === true ||
+    msg.event === "migration" ||
+    // Migration topic events occasionally arrive as `{"mint":"…","pool":"pump-amm"}`
+    // with no other markers — recognise them by a non-pump pool with no txType.
+    (typeof msg.pool === "string" &&
+      msg.pool.toLowerCase() !== "pump" &&
+      !txType)
+  ) {
     const ev: MigrationEvent = {
       kind: "migration",
       mint,
-      pool: msg.pool,
-      signature: msg.signature,
+      pool: optString(msg.pool),
+      signature: optString(msg.signature),
       received_at_ms: now,
       raw: msg,
     };
+    bumpCounter("migration");
     fanout(ev);
     return;
   }
-  if (msg.name || msg.symbol || msg.creator) {
-    const ev: NewTokenEvent = {
-      kind: "new_token",
-      mint,
-      name: msg.name,
-      symbol: msg.symbol,
-      image_uri: msg.imageUri ?? msg.image_uri ?? msg.image,
-      description: msg.description,
-      creator: msg.creator ?? msg.traderPublicKey,
-      initial_buy_sol: optNumber(msg.initialBuy ?? msg.solAmount),
-      pool: msg.pool,
-      v_sol_in_curve: optNumber(msg.vSolInBondingCurve),
-      v_tokens_in_curve: optNumber(msg.vTokensInBondingCurve),
-      market_cap_sol: optNumber(msg.marketCapSol),
-      uri: msg.uri,
-      twitter: msg.twitter,
-      telegram: msg.telegram,
-      website: msg.website,
-      received_at_ms: now,
-      raw: msg,
-    };
-    fanout(ev);
-  }
+
+  // Unknown shape. Keep a small breadcrumb for debugging without spamming.
+  bumpCounter("unknown");
+  streamCounters.lastUnknown = {
+    snippet: JSON.stringify(msg).slice(0, 200),
+    at: now,
+  };
+}
+
+function optString(v: any): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
 function optNumber(v: any): number | undefined {

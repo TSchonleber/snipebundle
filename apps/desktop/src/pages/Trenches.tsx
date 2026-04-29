@@ -13,7 +13,9 @@ import {
 import {
   isConnected as streamIsConnected,
   onConnectivityChange,
+  onCountersChange,
   onStreamEvent,
+  streamCounters,
   subscribeMigration,
   subscribeNewToken,
   type NewTokenEvent,
@@ -108,6 +110,12 @@ export function Trenches() {
   const [primaryWallet, setPrimaryWallet] = useState(getPrimaryWallet());
   const [feedback, setFeedback] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(streamIsConnected());
+  // Counter snapshot — re-rendered when the stream parser bumps anything.
+  // Surfaces 'X new / Y mig / Z trade' so we can diagnose at a glance
+  // whether the WS is actually delivering the right events.
+  const [counterTick, setCounterTick] = useState(0);
+  useEffect(() => onCountersChange(() => setCounterTick((x) => x + 1)), []);
+  void counterTick;
 
   useEffect(() => {
     const unsub = subscribeActiveWallet(() =>
@@ -339,6 +347,21 @@ export function Trenches() {
             </span>
           </div>
           <div className="flex items-center gap-3 font-mono text-2xs text-fg-subtle">
+            <span title="ws stream parser counters since page load">
+              new <span className="text-accent">{streamCounters.new_token}</span>
+              {" · "}
+              mig <span className="text-warn">{streamCounters.migration}</span>
+              {" · "}
+              trade {streamCounters.token_trade}
+              {streamCounters.unknown > 0 && (
+                <>
+                  {" · "}
+                  <span className="text-danger" title={streamCounters.lastUnknown?.snippet}>
+                    unk {streamCounters.unknown}
+                  </span>
+                </>
+              )}
+            </span>
             <LivePulse on={streamConnected} />
             {updatedAt && (
               <span>
