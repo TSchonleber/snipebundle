@@ -30,13 +30,36 @@ export function FanOutPanel({
     total_sol: number;
   } | null>(null);
   const [masterBalance, setMasterBalance] = useState<number | null>(null);
+  // Default: every sniper is a recipient. User can untick wallets they
+  // don't want to fund right now (already-funded ones, hot wallets they
+  // want to keep dry, etc.). Persisted only for the open session.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
 
-  const recipients = useMemo(() => snipers.map((s) => s.pubkey), [snipers]);
+  const recipients = useMemo(
+    () =>
+      snipers.filter((s) => !excluded.has(s.pubkey)).map((s) => s.pubkey),
+    [snipers, excluded],
+  );
   const totalRequired = useMemo(() => {
     const a = parseFloat(amount);
     if (!Number.isFinite(a)) return null;
     return a * recipients.length + 0.000005 * recipients.length;
   }, [amount, recipients.length]);
+
+  function toggleWallet(pubkey: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(pubkey)) next.delete(pubkey);
+      else next.add(pubkey);
+      return next;
+    });
+  }
+  function selectAll() {
+    setExcluded(new Set());
+  }
+  function selectNone() {
+    setExcluded(new Set(snipers.map((s) => s.pubkey)));
+  }
 
   useEffect(() => {
     if (!open || !master) return;
@@ -57,6 +80,9 @@ export function FanOutPanel({
     const a = parseFloat(amount);
     if (!Number.isFinite(a) || a <= 0) {
       return setError("Amount must be positive.");
+    }
+    if (recipients.length === 0) {
+      return setError("Pick at least one sniper to fund.");
     }
     if (totalRequired != null && masterBalance != null && totalRequired > masterBalance) {
       return setError(
@@ -113,13 +139,56 @@ export function FanOutPanel({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-xs text-fg-subtle uppercase tracking-wider">
-                snipers
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-sm font-semibold">
+                Recipients ({recipients.length}/{snipers.length})
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={selectAll}
+                  className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+                >
+                  all
+                </button>
+                <span className="font-mono text-2xs text-fg-subtle">·</span>
+                <button
+                  type="button"
+                  onClick={selectNone}
+                  className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
+                >
+                  none
+                </button>
               </div>
-              <div className="font-mono text-fg">{recipients.length}</div>
             </div>
+            <div className="max-h-44 overflow-y-auto rounded-lg border border-border bg-bg-raised divide-y divide-border/40">
+              {snipers.map((s) => {
+                const checked = !excluded.has(s.pubkey);
+                return (
+                  <label
+                    key={s.pubkey}
+                    className="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-fg/5"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleWallet(s.pubkey)}
+                      className="h-3.5 w-3.5 accent-accent"
+                    />
+                    <span className="font-mono text-2xs text-fg shrink-0 w-20 truncate">
+                      {s.label}
+                    </span>
+                    <span className="font-mono text-2xs text-fg-subtle truncate">
+                      {s.pubkey.slice(0, 8)}…{s.pubkey.slice(-6)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-sm">
             <div>
               <div className="text-xs text-fg-subtle uppercase tracking-wider">
                 total required

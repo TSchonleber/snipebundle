@@ -3,7 +3,6 @@ import { cn, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
-import { MintChart } from "../components/MintChart";
 import { WalletManager } from "../components/WalletManager";
 import { WalletPanel } from "../components/WalletPanel";
 import { ExportKeysModal } from "../components/ExportKeysModal";
@@ -122,25 +121,16 @@ export function Wallets() {
         )}
 
         {section === "wallets" && wallets.length > 0 && (
-          <>
-            <div className="mb-4">
-              <MintChart
-                mint={activeMint}
-                height={280}
-                onMintChange={setActiveMint}
-              />
-            </div>
-            <WalletPanel
-              wallets={wallets}
-              mode="full"
-              onConfigChanged={load}
-              chromeless
-              editingTemplatesExternal={editingTemplates}
-              onCloseTemplates={() => setEditingTemplates(false)}
-              activeMint={activeMint}
-              onActiveMintChange={setActiveMint}
-            />
-          </>
+          <WalletPanel
+            wallets={wallets}
+            mode="full"
+            onConfigChanged={load}
+            chromeless
+            editingTemplatesExternal={editingTemplates}
+            onCloseTemplates={() => setEditingTemplates(false)}
+            activeMint={activeMint}
+            onActiveMintChange={setActiveMint}
+          />
         )}
 
         {section === "manage" && (
