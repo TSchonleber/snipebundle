@@ -5,6 +5,7 @@ use snipebundle_core::{
     funding::{self, FanOutResult},
     keystore::{self, Keystore, StoredKeypair},
     launch::{self, LaunchMetadata, LaunchResult},
+    raydium_launch::{self, RaydiumLaunchArgs, RaydiumLaunchResult},
     volume::{self, VolumeBotConfig, VolumeBotStatus},
     wallet, Config, Engine, EngineState,
 };
@@ -1144,6 +1145,45 @@ pub async fn launch_multiple_tokens(
     }
     results.sort_by_key(|r| r.index);
     Ok(results)
+}
+
+#[derive(Deserialize)]
+pub struct RaydiumLaunchArgsWrapper {
+    pub args: RaydiumLaunchArgs,
+}
+
+#[tauri::command]
+pub async fn launch_token_raydium(
+    args: RaydiumLaunchArgsWrapper,
+    state: State<'_, AppState>,
+) -> Result<RaydiumLaunchResult> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    let ks = state
+        .keystore
+        .lock()
+        .await
+        .clone()
+        .ok_or("keystore locked")?;
+    args.args.validate().map_err(err)?;
+    let dev = find_wallet(&ks, &args.args.dev_pubkey).ok_or_else(|| {
+        format!("dev wallet {} not in keystore", args.args.dev_pubkey)
+    })?;
+    let mut co_buyers: Vec<(StoredKeypair, f64)> =
+        Vec::with_capacity(args.args.co_buyers.len());
+    for cb in &args.args.co_buyers {
+        let kp = find_wallet(&ks, &cb.pubkey).ok_or_else(|| {
+            format!("co-buyer wallet {} not in keystore", cb.pubkey)
+        })?;
+        co_buyers.push((kp, cb.sol));
+    }
+    raydium_launch::execute_raydium_launch(&args.args, &cfg.network, &dev, &co_buyers)
+        .await
+        .map_err(err)
 }
 
 async fn run_single_launch(

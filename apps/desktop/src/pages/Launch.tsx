@@ -6,8 +6,9 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc, type LaunchResult } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { MultiLaunchPanel } from "../components/MultiLaunchPanel";
+import { RaydiumLaunchPanel } from "../components/RaydiumLaunchPanel";
 
-type LaunchMode = "single" | "multi";
+type LaunchMode = "single" | "multi" | "raydium";
 
 type CoBuyerStrategy = "uniform" | "per_wallet" | "random";
 
@@ -289,7 +290,7 @@ export function Launch() {
             // dev creates token + opening buy in one jito bundle
           </span>
           <div className="ml-auto flex items-center gap-1">
-            {(["single", "multi"] as const).map((m) => (
+            {(["single", "multi", "raydium"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -301,7 +302,7 @@ export function Launch() {
                     : "border-border text-fg-subtle hover:text-fg-muted",
                 )}
               >
-                {m === "single" ? "single" : "multi"}
+                {m}
               </button>
             ))}
           </div>
@@ -313,6 +314,8 @@ export function Launch() {
             snipers={snipers}
             onComplete={() => refresh().catch(() => {})}
           />
+        ) : mode === "raydium" ? (
+          <RaydiumLaunchPanel devWallets={devWallets} snipers={snipers} />
         ) : (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">

@@ -202,6 +202,32 @@ export interface LaunchResult {
   co_buyer_total_sol: number;
 }
 
+/** v0.1.57: Raydium-direct launch (skip pump.fun). On-chain stub
+ *  returns "not yet implemented" until the CPMM pool init lands in
+ *  v0.1.58+. The data model + UI surface are wired now. */
+export interface RaydiumCoBuyer {
+  pubkey: string;
+  sol: number;
+}
+export interface RaydiumLaunchArgs {
+  dev_pubkey: string;
+  metadata: LaunchArgs["metadata"];
+  metadata_uri: string;
+  token_supply: number;
+  token_decimals: number;
+  initial_lp_token_amount: number;
+  initial_lp_sol: number;
+  burn_lp: boolean;
+  dev_buy_sol: number;
+  co_buyers: RaydiumCoBuyer[];
+}
+export interface RaydiumLaunchResult {
+  mint: string;
+  pool_id: string;
+  bundle_id: string;
+  lp_burn_signature: string | null;
+}
+
 /** v0.1.54: per-token result of a launch_multiple_tokens batch. */
 export interface MultiLaunchOutcome {
   index: number;
@@ -316,6 +342,10 @@ export const ipc = {
   launchMultipleTokens: (launches: LaunchArgs[]) =>
     invoke<MultiLaunchOutcome[]>("launch_multiple_tokens", {
       args: { launches },
+    }),
+  launchTokenRaydium: (args: RaydiumLaunchArgs) =>
+    invoke<RaydiumLaunchResult>("launch_token_raydium", {
+      args: { args },
     }),
   startVolumeSession: (config: VolumeBotConfig) =>
     invoke<string>("start_volume_session", { args: { config } }),

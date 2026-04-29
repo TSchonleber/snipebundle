@@ -40,6 +40,7 @@ pub fn run() {
             commands::create_volume_wallet,
             commands::launch_token,
             commands::launch_multiple_tokens,
+            commands::launch_token_raydium,
             commands::start_volume_session,
             commands::stop_volume_session,
             commands::list_volume_sessions,

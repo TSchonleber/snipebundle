@@ -11,6 +11,7 @@ pub mod engine;
 pub mod funding;
 pub mod launch;
 pub mod price_watcher;
+pub mod raydium_launch;
 pub mod trending;
 pub mod types;
 pub mod volume;
