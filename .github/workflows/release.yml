@@ -107,14 +107,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p _artifacts
-          shopt -s nullglob globstar
-          for f in apps/desktop/src-tauri/target/**/release/bundle/**/*; do
-            case "$f" in
-              *.msi|*.exe|*.dmg|*.AppImage|*.deb|*.rpm|*.app.tar.gz)
-                cp "$f" _artifacts/
-                ;;
-            esac
-          done
+          # macOS runners ship bash 3.2 without globstar — use find instead.
+          find apps/desktop/src-tauri/target \
+            -type f \
+            -path '*/release/bundle/*' \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+               -o -name '*.app.tar.gz' \) \
+            -exec cp {} _artifacts/ \; || true
           ls -la _artifacts || true
 
       - name: upload artifacts (intra-job)
