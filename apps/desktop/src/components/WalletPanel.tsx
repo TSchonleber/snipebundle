@@ -506,10 +506,11 @@ function WalletRow({
     ? binding.custom
     : templates[binding.selected_template ?? 0] ?? binding.custom;
 
+  // Bug fix v0.1.21: previously this always pulled binding.custom.label
+  // first, so a wallet bound to "aggressive" still showed "custom" in the
+  // collapsed chip. Read from the resolved active profile instead.
   const activeProfileLabel = (
-    binding.custom.label?.trim() ||
-    activeProfile.label ||
-    "custom"
+    (activeProfile.label?.trim() || "custom") as string
   ).toLowerCase();
 
   return (
