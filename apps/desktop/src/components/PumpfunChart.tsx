@@ -196,9 +196,15 @@ export function PumpfunChart({ mint, height }: Props) {
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#5fe39a",
       downColor: "#ef6f7d",
+      // Borders on with the same color as the body. Without borders, a
+      // single-trade candle (open=close=high=low) draws nothing visible —
+      // borders give us a horizontal line at minimum so the trade is
+      // always rendered.
+      borderVisible: true,
+      borderUpColor: "#5fe39a",
+      borderDownColor: "#ef6f7d",
       wickUpColor: "#5fe39a",
       wickDownColor: "#ef6f7d",
-      borderVisible: false,
       priceFormat: {
         type: "price",
         precision: 9,

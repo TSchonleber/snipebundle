@@ -34,48 +34,22 @@ export function MintChart({ mint, height, onClose, onMintChange }: Props) {
   const trimmed = mint.trim();
   const valid = isValidMint(trimmed);
 
-  // Probe pump.fun for the coin's migration status, then pick the chart:
-  //   - graduated (complete OR curve >= 99%) → DexScreener iframe
-  //     (post-Raydium trades only show up there)
-  //   - pre-migration / unknown pump.fun mint → PumpfunChart
-  //     (pump.fun /trades feed + PumpPortal WS subscription)
-  //   - non-pump mint we can't resolve → DexScreener
-  // null = unknown (loading), true = render pump chart, false = dexscreener.
-  //
-  // The 'pump' vanity suffix is the giveaway that a mint is a pump.fun
-  // bonding-curve token. A brand-new mint may not yet be indexed by
-  // pump.fun's frontend-api (so data.coin comes back null), but
-  // DexScreener will *never* resolve it pre-migration — sticking the user
-  // on a "Loading pair…" iframe forever. Default such mints to
-  // PumpfunChart; the WS sub picks up trades the instant they hit.
+  // Decide chart source by mint shape, no roundtrip required:
+  //   - 'pump' vanity suffix → PumpfunChart (pre-migration trades + WS)
+  //   - anything else → DexScreener iframe
+  // The previous probe-then-route approach added a 500-1500ms delay
+  // before any chart rendered, plus a duplicate /coins call (PumpfunChart
+  // fetches its own seed). For pump-suffix mints, even a graduated coin
+  // works fine in PumpfunChart (the historical pre-migration trades show
+  // up immediately, and the dexscreener ↗ link in the header is one click
+  // away if the user wants Raydium candles).
   const [usePumpChart, setUsePumpChart] = useState<boolean | null>(null);
   useEffect(() => {
     if (!valid) {
       setUsePumpChart(null);
       return;
     }
-    let cancelled = false;
-    setUsePumpChart(null);
-    const looksLikePumpMint = trimmed.toLowerCase().endsWith("pump");
-    ipc
-      .getPumpfunChart(trimmed)
-      .then((data) => {
-        if (cancelled) return;
-        if (data.coin) {
-          const graduated =
-            data.coin.complete === true ||
-            (data.coin.bonding_curve_progress_pct ?? 0) >= 99;
-          setUsePumpChart(!graduated);
-        } else {
-          setUsePumpChart(looksLikePumpMint);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setUsePumpChart(looksLikePumpMint);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setUsePumpChart(trimmed.toLowerCase().endsWith("pump"));
   }, [trimmed, valid]);
 
   return (
