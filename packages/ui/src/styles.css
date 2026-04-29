@@ -8,9 +8,80 @@
   }
   html,
   body {
-    background-color: #0a0a0b;
-    color: #e8e8ec;
+    background-color: #08090b;
+    color: #e6e7ea;
     font-family: "InterVariable", "Inter", system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Numbers should always be tabular by default — this is a trading app. */
+  body {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle, narrow scrollbars to match the terminal feel. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1c1d24;
+    border-radius: 0;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a2c36;
+  }
+
+  /* Inputs — kill the default browser ring; we use ring-accent on focus. */
+  input,
+  textarea,
+  select {
+    font-feature-settings: "ss01", "cv11", "tnum";
+  }
+
+  /* Code blocks / pubkeys etc. */
+  code,
+  pre,
+  .font-mono {
+    font-feature-settings: "calt" 0;
+  }
+}
+
+@layer utilities {
+  /* Single-pixel border that survives sub-pixel rendering on retina. */
+  .hairline {
+    box-shadow: inset 0 0 0 1px #1c1d24;
+  }
+  .hairline-strong {
+    box-shadow: inset 0 0 0 1px #2a2c36;
+  }
+  /* Diagonal cross-hatch for "no data / empty" panels. */
+  .hatch {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0,
+      transparent 6px,
+      rgba(255, 255, 255, 0.02) 6px,
+      rgba(255, 255, 255, 0.02) 7px
+    );
+  }
+  /* Caret blink used in the brand mark. */
+  @keyframes caret {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+  .caret-blink {
+    animation: caret 1.1s step-end infinite;
   }
 }

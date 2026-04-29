@@ -175,25 +175,23 @@ export function ExportKeysModal({ onClose }: { onClose: () => void }) {
                   {showSecrets ? "Hide secrets" : "Show secrets"}
                 </Button>
                 <Button size="sm" variant="secondary" onClick={copyAll}>
-                  {copiedPubkey === "__all__" ? "✓ copied all" : "Copy all"}
+                  {copiedPubkey === "__all__" ? "copied all" : "Copy all"}
                 </Button>
                 <Button size="sm" onClick={saveAsFile}>
-                  💾 Save as file
+                  Save as file
                 </Button>
               </div>
             </div>
 
             {savedPath && (
-              <Card className="border-accent/40">
-                <CardBody className="text-sm">
-                  <div className="text-accent font-semibold">
-                    ✓ Backup written
-                  </div>
-                  <code className="mt-1 block break-all font-mono text-xs text-fg-muted">
-                    {savedPath}
-                  </code>
-                </CardBody>
-              </Card>
+              <div className="border-l-2 border-accent bg-accent/5 px-3 py-2">
+                <div className="font-mono text-2xs text-accent uppercase tracking-tight2">
+                  backup written
+                </div>
+                <code className="mt-0.5 block break-all font-mono text-xs text-fg-muted">
+                  {savedPath}
+                </code>
+              </div>
             )}
 
             {error && (
@@ -217,7 +215,7 @@ export function ExportKeysModal({ onClose }: { onClose: () => void }) {
                       onClick={() => copy(w.pubkey, `pub:${w.pubkey}`)}
                       className="text-[10px] text-fg-subtle hover:text-fg"
                     >
-                      {copiedPubkey === `pub:${w.pubkey}` ? "✓ copied" : "copy pubkey"}
+                      {copiedPubkey === `pub:${w.pubkey}` ? "copied" : "copy pubkey"}
                     </button>
                   </div>
                   <code className="block break-all font-mono text-[11px] text-fg">
@@ -232,7 +230,7 @@ export function ExportKeysModal({ onClose }: { onClose: () => void }) {
                       onClick={() => copy(w.secret_b58, `sec:${w.pubkey}`)}
                       className="text-[10px] text-fg-subtle hover:text-fg"
                     >
-                      {copiedPubkey === `sec:${w.pubkey}` ? "✓ copied" : "copy secret"}
+                      {copiedPubkey === `sec:${w.pubkey}` ? "copied" : "copy secret"}
                     </button>
                   </div>
                   <code

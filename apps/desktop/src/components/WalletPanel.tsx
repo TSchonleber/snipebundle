@@ -288,61 +288,57 @@ export function WalletPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">
-              {compact ? "Wallets" : "Wallet panel"}
+          <div className="flex items-baseline gap-2">
+            <h3 className="font-mono text-[13px] text-fg">
+              {compact ? "wallets" : "wallets"}
             </h3>
-            {!compact && (
-              <p className="text-xs text-fg-subtle mt-0.5">
-                Each wallet picks a shared profile template or its own{" "}
-                <strong className="text-fg-muted">Custom</strong> rule. Edit
-                the templates here to retune every wallet bound to them.
-              </p>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {!compact && (
-              <>
-                <Button
-                  size="sm"
-                  variant={editingTemplates ? "primary" : "secondary"}
-                  onClick={() => setEditingTemplates((s) => !s)}
-                  title="Edit shared profile templates (affects every wallet bound to them)"
-                >
-                  {editingTemplates ? "✓ Done" : "✎ Edit templates"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setShowExport(true)}
-                  title="Reveal & export private keys for backup"
-                >
-                  🔑 Export keys
-                </Button>
-              </>
-            )}
-            <span className="text-xs text-fg-subtle font-mono">
-              {wallets.length}
+            <span className="font-mono text-2xs text-fg-subtle">
+              [{wallets.length}]
             </span>
           </div>
+          {!compact && (
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setEditingTemplates((s) => !s)}
+                className={cn(
+                  "font-mono text-2xs transition-colors",
+                  editingTemplates
+                    ? "text-accent"
+                    : "text-fg-subtle hover:text-fg-muted",
+                )}
+                title="Edit shared profile templates (affects every wallet bound to them)"
+              >
+                {editingTemplates ? "[ done ]" : "edit templates"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowExport(true)}
+                className="font-mono text-2xs text-fg-subtle hover:text-fg-muted transition-colors"
+                title="Reveal & export private keys for backup"
+              >
+                export keys
+              </button>
+            </div>
+          )}
         </div>
       </CardHeader>
-      <CardBody className="space-y-4">
+      <CardBody className="space-y-3">
         {/* Active mint input — global to the panel */}
-        <div>
-          <label className="block text-xs uppercase tracking-wider text-fg-subtle mb-1.5">
-            Active mint (for quick buy/sell)
-          </label>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-2xs text-fg-subtle shrink-0">
+            mint &gt;
+          </span>
           <input
             value={activeMint}
             onChange={(e) => setActiveMint(e.target.value)}
             placeholder="paste pump.fun mint address"
-            className="w-full rounded-lg border border-border bg-bg-raised px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-accent"
+            className="flex-1 border-b border-border bg-transparent px-1 py-1 font-mono text-xs focus:outline-none focus:border-accent placeholder:text-fg-subtle/60"
           />
         </div>
 
         {error && (
-          <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+          <div className="border-l-2 border-danger bg-danger/5 px-3 py-2 font-mono text-2xs text-danger">
             {error}
           </div>
         )}
@@ -360,7 +356,7 @@ export function WalletPanel({
           />
         )}
 
-        <div className="space-y-3">
+        <div className="divide-y divide-border/60 -mx-4">
           {wallets.map((w) => {
             const binding = getBindingFor(w.pubkey);
             const pnl = walletPnl.get(w.pubkey);
@@ -491,8 +487,10 @@ function WalletRow({
   return (
     <div
       className={cn(
-        "rounded-xl border bg-bg-subtle p-4",
-        isMaster ? "border-accent/30" : "border-border",
+        "border-l-2 bg-bg-subtle/40 px-4 py-3 transition-colors",
+        isMaster
+          ? "border-l-accent"
+          : "border-l-border hover:border-l-fg-subtle",
       )}
     >
       {/* Header: identity + balance + P&L */}
@@ -500,10 +498,8 @@ function WalletRow({
         <div className="flex items-center gap-2 min-w-0">
           <span
             className={cn(
-              "shrink-0 rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-              isMaster
-                ? "bg-accent/15 text-accent"
-                : "bg-bg-raised text-fg-muted",
+              "shrink-0 font-mono text-2xs",
+              isMaster ? "text-accent" : "text-fg-muted",
             )}
           >
             {wallet.label}
@@ -511,37 +507,25 @@ function WalletRow({
           <button
             type="button"
             onClick={copy}
-            className="font-mono text-xs text-fg-muted hover:text-fg truncate"
+            className="font-mono text-xs text-fg-subtle hover:text-fg-muted truncate transition-colors"
             title="copy pubkey"
           >
-            {copied ? "✓ copied" : `${wallet.pubkey.slice(0, 12)}…`}
+            {copied ? "copied" : `${wallet.pubkey.slice(0, 8)}..${wallet.pubkey.slice(-4)}`}
           </button>
         </div>
         <div className="flex items-center gap-4 text-right">
-          <div>
-            <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
-              balance
-            </div>
-            <div className="font-mono text-sm tabular-nums">
-              {balance != null ? balance.toFixed(3) : "—"}
-            </div>
-          </div>
-          <div>
-            <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
-              realized
-            </div>
-            <div
-              className={`font-mono text-sm tabular-nums font-semibold ${realizedColor}`}
-            >
-              {realizedLabel}
-            </div>
-          </div>
+          <Stat label="bal" value={balance != null ? balance.toFixed(3) : "—"} />
+          <Stat
+            label="pnl"
+            value={realizedLabel}
+            valueClass={cn("font-semibold", realizedColor)}
+          />
           {pnl && pnl.trades > 0 && (
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-fg-subtle">
-                W/L
+            <div className="text-right">
+              <div className="font-mono text-2xs text-fg-subtle leading-tight">
+                w/l
               </div>
-              <div className="font-mono text-xs">
+              <div className="font-mono text-xs leading-tight">
                 <span className="text-accent">{pnl.wins}</span>
                 <span className="text-fg-subtle">/</span>
                 <span className="text-danger">{pnl.trades - pnl.wins}</span>
@@ -552,46 +536,47 @@ function WalletRow({
       </div>
 
       {/* Profile + risk row */}
-      <div className="mt-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            Profile
-          </span>
-          <span className="text-[10px] font-mono text-fg-muted">
-            TP +{activeProfile.take_profit_pct}% · SL{" "}
-            {binding.stop_loss_enabled
-              ? `-${activeProfile.stop_loss_pct}%`
-              : "off"}
-            {" · "}
+      <div className="mt-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="font-mono text-2xs text-fg-subtle">profile</span>
+          <span className="font-mono text-2xs text-fg-muted">
+            tp+{activeProfile.take_profit_pct}
+            <span className="text-fg-subtle"> / </span>
+            {binding.stop_loss_enabled ? (
+              <>sl-{activeProfile.stop_loss_pct}</>
+            ) : (
+              <span className="text-fg-subtle">sl off</span>
+            )}
+            <span className="text-fg-subtle"> / </span>
             {activeProfile.max_hold_seconds}s
           </span>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1">
           {templates.map((p, idx) => {
             const sel = !usingCustom && binding.selected_template === idx;
-            const name = p.label ?? `Template ${idx + 1}`;
+            const name = p.label ?? `t${idx + 1}`;
             return (
               <button
                 key={idx}
                 type="button"
                 disabled={busy}
                 onClick={() => onSelectTemplate(idx)}
-                title={`TP +${p.take_profit_pct}% / SL -${p.stop_loss_pct}% / ${p.max_hold_seconds}s hold (shared template)`}
+                title={`tp+${p.take_profit_pct} / sl-${p.stop_loss_pct} / ${p.max_hold_seconds}s (shared)`}
                 className={cn(
-                  "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
+                  "border px-2.5 py-1 font-mono text-2xs transition-colors disabled:opacity-50",
                   sel
                     ? "border-accent bg-accent/10 text-accent"
-                    : "border-border text-fg-muted hover:border-border-strong hover:text-fg",
+                    : "border-border text-fg-subtle hover:border-border-strong hover:text-fg-muted",
                 )}
               >
-                {compact ? idx + 1 : name}
+                {compact ? idx + 1 : name.toLowerCase()}
               </button>
             );
           })}
           {!compact && (
             <div
               className={cn(
-                "inline-flex items-center rounded-md border transition-colors",
+                "inline-flex items-stretch border transition-colors",
                 usingCustom
                   ? "border-warn bg-warn/10"
                   : "border-dashed border-border hover:border-border-strong",
@@ -601,26 +586,26 @@ function WalletRow({
                 type="button"
                 disabled={busy}
                 onClick={onSelectCustom}
-                title={`This wallet's own override (TP +${binding.custom.take_profit_pct}% / SL -${binding.custom.stop_loss_pct}% / ${binding.custom.max_hold_seconds}s)`}
+                title={`Wallet override: tp+${binding.custom.take_profit_pct} / sl-${binding.custom.stop_loss_pct} / ${binding.custom.max_hold_seconds}s`}
                 className={cn(
-                  "px-3 py-1.5 text-xs font-medium disabled:opacity-50",
-                  usingCustom ? "text-warn" : "text-fg-muted hover:text-fg",
+                  "px-2.5 py-1 font-mono text-2xs disabled:opacity-50",
+                  usingCustom ? "text-warn" : "text-fg-subtle hover:text-fg-muted",
                 )}
               >
-                {binding.custom.label?.trim() || "Custom"}
+                {(binding.custom.label?.trim() || "custom").toLowerCase()}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingCustom((s) => !s)}
                 className={cn(
-                  "border-l px-2 py-1.5 text-[10px] transition-colors",
+                  "border-l px-1.5 py-1 font-mono text-2xs transition-colors",
                   usingCustom
-                    ? "border-warn/40 text-warn hover:bg-warn/15"
-                    : "border-border text-fg-subtle hover:text-fg",
+                    ? "border-warn/40 text-warn hover:bg-warn/20"
+                    : "border-border text-fg-subtle hover:text-fg-muted",
                 )}
                 title="edit this wallet's custom profile"
               >
-                ✎
+                edit
               </button>
             </div>
           )}
@@ -639,21 +624,20 @@ function WalletRow({
       </div>
 
       {/* SL/TS toggles */}
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-2.5 flex items-center gap-2">
         <ToggleChip
-          label="Stop loss"
+          label="sl"
           on={binding.stop_loss_enabled}
-          onLabel={`-${activeProfile.stop_loss_pct}%`}
+          onLabel={`-${activeProfile.stop_loss_pct}`}
           onClick={onToggleSL}
           disabled={busy}
         />
         <ToggleChip
-          label="Trailing stop"
+          label="trail"
           on={binding.trailing_stop_pct != null}
-          onLabel={`-${binding.trailing_stop_pct}%`}
+          onLabel={`-${binding.trailing_stop_pct}`}
           onClick={onToggleTS}
           disabled={busy}
-          helper="engine support v0.1.13"
         />
       </div>
 
@@ -662,22 +646,22 @@ function WalletRow({
         <>
           <PresetRow
             kind="buy"
-            label="Buy this wallet"
+            label="buy"
             unit=" SOL"
             values={binding.buy_presets_sol}
             disabled={busy || !activeMint}
-            disabledHint={!activeMint ? "set active mint to enable" : null}
+            disabledHint={!activeMint ? "set mint" : null}
             onAction={(v) => onQuickBuy(v)}
             onSave={onSaveBuyPresets}
           />
           <PresetRow
             kind="sell"
-            label="Sell this wallet's holdings"
+            label="sell"
             unit="%"
             max100
             values={binding.sell_presets_pct}
             disabled={busy || !activeMint}
-            disabledHint={!activeMint ? "set active mint to enable" : null}
+            disabledHint={!activeMint ? "set mint" : null}
             onAction={(v) => onQuickSell(v)}
             onSave={onSaveSellPresets}
           />
@@ -685,17 +669,37 @@ function WalletRow({
       )}
 
       {feedback && (
-        <div className="mt-3 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs text-accent">
-          ✓ {feedback}
+        <div className="mt-3 border-l-2 border-accent/60 bg-accent/5 px-3 py-1.5 font-mono text-2xs text-accent">
+          {feedback}
         </div>
       )}
     </div>
   );
 }
 
-/// Per-wallet, per-button preset editor. In view mode each preset is a clickable
-/// Button that fires onAction. In edit mode each preset becomes a small inline
-/// chip with editable value + ✕ to remove, plus + Add to extend (max 8).
+function Stat({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+}) {
+  return (
+    <div className="text-right">
+      <div className="font-mono text-2xs text-fg-subtle leading-tight">
+        {label}
+      </div>
+      <div className={cn("font-mono text-xs leading-tight", valueClass)}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/// Per-wallet, per-button preset editor. View mode = clickable preset buttons;
+/// edit mode = chip-style inputs with × to remove and + to add (max 8).
 function PresetRow({
   kind,
   label,
@@ -762,44 +766,45 @@ function PresetRow({
   }
 
   const accent = kind === "buy" ? "text-accent" : "text-danger";
-  const accentBorder = kind === "buy" ? "border-accent/30" : "border-danger/30";
-  const accentBg = kind === "buy" ? "bg-accent/10" : "bg-danger/10";
+  const accentBorder = kind === "buy" ? "border-accent/40" : "border-danger/40";
+  const accentBgHover =
+    kind === "buy" ? "hover:bg-accent/10" : "hover:bg-danger/10";
 
   return (
-    <div className="mt-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className={`text-[10px] uppercase tracking-wider ${accent}`}>
-          {label}
-        </span>
-        <div className="flex items-center gap-2">
+    <div className="mt-2.5">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className={cn("font-mono text-2xs", accent)}>{label}</span>
+        <div className="flex items-center gap-3">
           {!editing && disabledHint && (
-            <span className="text-[10px] text-fg-subtle">{disabledHint}</span>
+            <span className="font-mono text-2xs text-fg-subtle">
+              {disabledHint}
+            </span>
           )}
           {editing ? (
             <>
               <button
                 type="button"
                 onClick={cancel}
-                className="text-[10px] text-fg-subtle hover:text-fg"
+                className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
               >
                 cancel
               </button>
               <button
                 type="button"
                 onClick={save}
-                className="text-[10px] text-accent hover:underline"
+                className="font-mono text-2xs text-accent hover:underline"
               >
-                ✓ done
+                done
               </button>
             </>
           ) : (
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="text-[10px] text-fg-subtle hover:text-fg"
+              className="font-mono text-2xs text-fg-subtle hover:text-fg-muted"
               title="edit preset values for this wallet"
             >
-              ✎ edit
+              edit
             </button>
           )}
         </div>
@@ -807,12 +812,12 @@ function PresetRow({
 
       {editing ? (
         <div className="space-y-2">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             {drafts.map((d, i) => (
               <div
                 key={i}
                 className={cn(
-                  "inline-flex items-center gap-1 rounded-md border bg-bg-raised px-2 py-1",
+                  "inline-flex items-center gap-1 border bg-bg-raised px-1.5 py-0.5",
                   accentBorder,
                 )}
               >
@@ -821,20 +826,20 @@ function PresetRow({
                   onChange={(e) => setDraft(i, e.target.value)}
                   inputMode="decimal"
                   className={cn(
-                    "w-14 bg-transparent font-mono text-xs text-right focus:outline-none",
+                    "w-12 bg-transparent font-mono text-xs text-right focus:outline-none",
                     accent,
                   )}
                 />
-                <span className="font-mono text-[10px] text-fg-subtle">
+                <span className="font-mono text-2xs text-fg-subtle">
                   {unit.trim()}
                 </span>
                 <button
                   type="button"
                   onClick={() => removeDraft(i)}
-                  className="ml-0.5 text-[10px] text-fg-subtle hover:text-danger"
-                  title="remove this preset"
+                  className="ml-0.5 font-mono text-2xs text-fg-subtle hover:text-danger"
+                  title="remove"
                 >
-                  ✕
+                  ×
                 </button>
               </div>
             ))}
@@ -842,40 +847,36 @@ function PresetRow({
               <button
                 type="button"
                 onClick={addDraft}
-                className="rounded-md border border-dashed border-border bg-bg-raised px-3 py-1 text-xs text-fg-muted hover:border-border-strong hover:text-fg"
+                className="border border-dashed border-border bg-bg-raised px-2 py-0.5 font-mono text-2xs text-fg-subtle hover:border-border-strong hover:text-fg-muted"
               >
-                + add
+                +
               </button>
             )}
           </div>
           {error && (
-            <div className="rounded-md border border-danger/40 bg-danger/10 p-2 text-[11px] text-danger">
+            <div className="border-l-2 border-danger bg-danger/5 px-2 py-1 font-mono text-2xs text-danger">
               {error}
             </div>
           )}
-          <p className="text-[10px] text-fg-subtle">
-            Up to 8 presets per wallet. Each value is{" "}
-            {kind === "buy" ? "SOL spent on a buy" : "% of holdings sold"}.
-          </p>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           {values.map((v) => (
-            <Button
+            <button
               key={v}
-              size="sm"
-              variant={kind === "buy" ? "secondary" : "danger"}
+              type="button"
               disabled={disabled}
               onClick={() => onAction(v)}
-              className={
-                kind === "buy"
-                  ? `${accentBorder} ${accentBg} ${accent} hover:bg-accent/20`
-                  : ""
-              }
+              className={cn(
+                "border px-2.5 py-1 font-mono text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                accent,
+                accentBorder,
+                accentBgHover,
+              )}
             >
               {v}
               {unit}
-            </Button>
+            </button>
           ))}
         </div>
       )}
@@ -1001,10 +1002,10 @@ function ProfileSetEditor({
             type="button"
             onClick={() => removeRow(i)}
             disabled={drafts.length <= 1}
-            className="text-[11px] text-fg-subtle hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed"
+            className="font-mono text-2xs text-fg-subtle hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed"
             title="remove this template"
           >
-            ✕
+            ×
           </button>
         </div>
       ))}
@@ -1147,21 +1148,26 @@ function ToggleChip({
       disabled={disabled}
       title={helper}
       className={cn(
-        "flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50",
+        "inline-flex items-center gap-1.5 border px-2 py-1 font-mono text-2xs transition-colors disabled:opacity-50",
         on
-          ? "border-accent/40 bg-accent/10 text-accent"
-          : "border-border text-fg-muted hover:border-border-strong",
+          ? "border-accent/50 bg-accent/5 text-accent"
+          : "border-border text-fg-subtle hover:border-border-strong hover:text-fg-muted",
       )}
     >
       <span
         className={cn(
-          "inline-block h-2 w-2 rounded-full",
-          on ? "bg-accent" : "bg-fg-subtle",
+          "inline-block h-1.5 w-1.5 rounded-full",
+          on ? "bg-accent" : "bg-fg-subtle/60",
         )}
       />
       <span>{label}</span>
-      <span className="font-mono text-[10px] text-fg-subtle">
-        {on ? onLabel : "OFF"}
+      <span
+        className={cn(
+          "tabular-nums",
+          on ? "text-accent/80" : "text-fg-subtle/70",
+        )}
+      >
+        {on ? onLabel : "off"}
       </span>
     </button>
   );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Card, CardBody, type WalletInfo } from "@snipebundle/ui";
+import { type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { FanOutPanel } from "../components/FanOutPanel";
@@ -49,34 +49,34 @@ export function Wallets() {
   return (
     <div className="min-h-screen">
       <AppNav status="stopped" />
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <h1 className="text-3xl font-bold tracking-tight">Wallets</h1>
-        <p className="mt-2 text-fg-muted">
-          Manage, fund, and inspect your wallets. snipebundle never moves SOL
-          on your behalf for funding — funding source is your choice (CEX
-          withdrawal, Phantom, Solflare, hardware wallet, etc).
-        </p>
+      <div className="mx-auto max-w-5xl px-5 py-6">
+        <div className="flex items-baseline gap-3 mb-5">
+          <h1 className="font-mono text-base text-fg">wallets</h1>
+          <span className="font-mono text-2xs text-fg-subtle">
+            // your keys, your funding, your problem
+          </span>
+        </div>
 
         {error && (
-          <Card className="mt-4 border-danger/40">
-            <CardBody className="text-sm text-danger">{error}</CardBody>
-          </Card>
+          <div className="mb-4 border-l-2 border-danger bg-danger/5 px-3 py-2 font-mono text-2xs text-danger">
+            {error}
+          </div>
         )}
 
         {wallets.length > 0 && (
-          <div className="mt-6">
+          <div className="mb-5">
             <WalletPanel wallets={wallets} mode="full" onConfigChanged={load} />
           </div>
         )}
 
         {wallets.length > 0 && (
-          <div className="mt-6">
+          <div className="mb-5">
             <WalletManager wallets={wallets} onChanged={load} />
           </div>
         )}
 
         {master && snipers.length > 0 && (
-          <div className="mt-6">
+          <div className="mb-5">
             <FanOutPanel
               master={master}
               snipers={snipers}
@@ -85,32 +85,23 @@ export function Wallets() {
           </div>
         )}
 
-        <Card className="mt-8">
-          <CardBody>
-            <h3 className="font-semibold">Funding tips</h3>
-            <ul className="mt-2 space-y-1.5 text-sm text-fg-muted list-disc list-inside">
-              <li>
-                Every wallet here is yours. The sniper bundle runs from the
-                snipers; the dev wallet runs the launch flow.
-              </li>
-              <li>
-                Recommended amount per sniper ≈{" "}
-                <span className="font-mono">
-                  {recommended.toFixed(3)} SOL
-                </span>{" "}
-                (snipe size + Jito tip + priority fee + small buffer).
-              </li>
-              <li>
-                For operational privacy, fund each wallet from a different
-                source (CEX accounts, separate hot wallets) so chain analytics
-                can't easily group them.
-              </li>
-              <li>
-                Page polls Solana RPC every ~8s. New deposits appear next tick.
-              </li>
-            </ul>
-          </CardBody>
-        </Card>
+        <div className="mt-8 border-t border-border pt-4">
+          <div className="font-mono text-2xs text-fg-subtle mb-2">
+            // funding notes
+          </div>
+          <ul className="space-y-1 font-mono text-2xs text-fg-muted">
+            <li>
+              recommended per sniper ≈{" "}
+              <span className="text-fg">{recommended.toFixed(3)} SOL</span>{" "}
+              (snipe + jito tip + priority fee + buffer)
+            </li>
+            <li>
+              fund each wallet from a different source so chain analytics
+              can't trivially group them
+            </li>
+            <li>balances poll every ~8s</li>
+          </ul>
+        </div>
       </div>
     </div>
   );

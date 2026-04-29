@@ -6,25 +6,25 @@ const preset: Partial<Config> = {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "#0a0a0b",
-          subtle: "#111114",
-          raised: "#16161a",
+          DEFAULT: "#08090b",
+          subtle: "#0e0f12",
+          raised: "#13141a",
         },
         border: {
-          DEFAULT: "#1f1f24",
-          strong: "#2a2a30",
+          DEFAULT: "#1c1d24",
+          strong: "#2a2c36",
         },
         fg: {
-          DEFAULT: "#e8e8ec",
-          muted: "#9b9ba3",
-          subtle: "#6b6b75",
+          DEFAULT: "#e6e7ea",
+          muted: "#9094a0",
+          subtle: "#5e6270",
         },
         accent: {
-          DEFAULT: "#7cf2a0",
-          dim: "#3aa466",
+          DEFAULT: "#5fe39a",
+          dim: "#2f9460",
         },
-        warn: "#f2c87c",
-        danger: "#f27c8b",
+        warn: "#e8b66c",
+        danger: "#ef6f7d",
       },
       fontFamily: {
         sans: [
@@ -37,14 +37,21 @@ const preset: Partial<Config> = {
         ],
         mono: [
           "JetBrains Mono",
+          "JetBrainsMono Nerd Font",
           "ui-monospace",
           "SFMono-Regular",
           "Menlo",
           "monospace",
         ],
       },
+      fontSize: {
+        "2xs": ["0.6875rem", { lineHeight: "1rem" }],
+      },
+      letterSpacing: {
+        tight2: "-0.012em",
+      },
       boxShadow: {
-        glow: "0 0 0 1px rgba(124,242,160,0.3), 0 0 24px rgba(124,242,160,0.15)",
+        glow: "0 0 0 1px rgba(95,227,154,0.35), 0 0 24px rgba(95,227,154,0.12)",
       },
     },
   },
