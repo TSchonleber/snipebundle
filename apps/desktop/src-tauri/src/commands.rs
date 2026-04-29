@@ -465,7 +465,7 @@ pub async fn manual_snipe(
     let bundle_id = bundler::execute_buy_per_wallet(&selected, &args.mint, &amounts, &cfg.network)
         .await
         .map_err(err)?;
-    spawn_universal_wallet_exits(selected, args.mint.clone(), cfg);
+    spawn_universal_wallet_exits(selected, args.mint.clone(), cfg, ks);
     Ok(bundle_id)
 }
 
@@ -746,7 +746,7 @@ pub async fn launch_token(
         exit_wallets.push(dev);
     }
     exit_wallets.extend(co_buyers.iter().map(|(wallet, _)| wallet.clone()));
-    spawn_universal_wallet_exits(exit_wallets, result.mint.clone(), cfg);
+    spawn_universal_wallet_exits(exit_wallets, result.mint.clone(), cfg, ks);
 
     Ok(result)
 }
@@ -780,6 +780,89 @@ pub async fn fan_out_from_master(
     funding::fan_out_from_master(&master, &args.recipients, args.sol_per_wallet, &cfg.network)
         .await
         .map_err(err)
+}
+
+#[tauri::command]
+pub async fn list_bundle_groups(
+    state: State<'_, AppState>,
+) -> Result<Vec<snipebundle_core::config::BundleGroup>> {
+    let cfg = state
+        .config
+        .lock()
+        .await
+        .clone()
+        .ok_or("config not loaded")?;
+    Ok(cfg.bundle_groups.clone())
+}
+
+#[derive(Deserialize)]
+pub struct SaveBundleGroupArgs {
+    pub group: snipebundle_core::config::BundleGroup,
+}
+
+#[tauri::command]
+pub async fn save_bundle_group(
+    args: SaveBundleGroupArgs,
+    state: State<'_, AppState>,
+) -> Result<snipebundle_core::config::BundleGroup> {
+    let mut group = args.group;
+    if group.id.is_empty() {
+        // Generate a stable id derived from name + a short random suffix.
+        // No external uuid crate dep required.
+        let mut buf = group.name.to_lowercase();
+        buf.retain(|c| c.is_ascii_alphanumeric());
+        if buf.is_empty() {
+            buf.push_str("group");
+        }
+        // Unique-ish suffix from current nanos — keeps ids stable
+        // without a rand crate dependency.
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        group.id = format!("{buf}-{suffix:x}");
+    }
+    group.validate().map_err(err)?;
+
+    let mut guard = state.config.lock().await;
+    let cfg = guard.as_mut().ok_or("config not loaded")?;
+    if let Some(existing) = cfg.bundle_groups.iter_mut().find(|g| g.id == group.id) {
+        *existing = group.clone();
+    } else {
+        cfg.bundle_groups.push(group.clone());
+    }
+
+    let cfg_snapshot = cfg.clone();
+    drop(guard);
+    let path = state.config_path.lock().await.clone();
+    save_to_disk(&path, &cfg_snapshot).map_err(err)?;
+    Ok(group)
+}
+
+#[derive(Deserialize)]
+pub struct DeleteBundleGroupArgs {
+    pub id: String,
+}
+
+#[tauri::command]
+pub async fn delete_bundle_group(
+    args: DeleteBundleGroupArgs,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut guard = state.config.lock().await;
+    let cfg = guard.as_mut().ok_or("config not loaded")?;
+    cfg.bundle_groups.retain(|g| g.id != args.id);
+    // Also clear any wallet binding that referenced this group.
+    for binding in cfg.wallet_bindings.values_mut() {
+        if binding.rebuy_group_id.as_deref() == Some(args.id.as_str()) {
+            binding.rebuy_group_id = None;
+        }
+    }
+    let cfg_snapshot = cfg.clone();
+    drop(guard);
+    let path = state.config_path.lock().await.clone();
+    save_to_disk(&path, &cfg_snapshot).map_err(err)?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -876,7 +959,12 @@ fn find_wallet(ks: &Keystore, pubkey: &str) -> Option<StoredKeypair> {
         .cloned()
 }
 
-fn spawn_universal_wallet_exits(wallets: Vec<StoredKeypair>, mint: String, cfg: Config) {
+fn spawn_universal_wallet_exits(
+    wallets: Vec<StoredKeypair>,
+    mint: String,
+    cfg: Config,
+    ks: Keystore,
+) {
     if wallets.is_empty() {
         return;
     }
@@ -885,7 +973,32 @@ fn spawn_universal_wallet_exits(wallets: Vec<StoredKeypair>, mint: String, cfg: 
             .into_iter()
             .map(|wallet| {
                 let rule = cfg.resolved_exit_for_wallet(&wallet.pubkey);
-                (wallet, rule)
+                // Resolve the rebuy group's pubkeys → keypairs now (keystore
+                // is in scope here). Watcher gets a self-contained chain.
+                let rebuy = rule.rebuy_group.as_ref().and_then(|group| {
+                    let mut keys: Vec<StoredKeypair> =
+                        Vec::with_capacity(group.wallet_pubkeys.len());
+                    for pk in &group.wallet_pubkeys {
+                        if let Some(found) = find_wallet(&ks, pk) {
+                            keys.push(found);
+                        } else {
+                            tracing::warn!(
+                                group = %group.name,
+                                missing = %pk,
+                                "rebuy group references missing wallet"
+                            );
+                        }
+                    }
+                    if keys.is_empty() {
+                        return None;
+                    }
+                    Some(exit::RebuyChain {
+                        label: group.name.clone(),
+                        wallets: keys,
+                        sol_per_wallet: group.default_sol_per_wallet,
+                    })
+                });
+                (wallet, rule, rebuy)
             })
             .collect::<Vec<_>>();
         let (_cancel_tx, cancel_rx) = watch::channel(false);

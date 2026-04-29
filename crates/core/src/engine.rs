@@ -303,6 +303,7 @@ impl Engine {
             s.last_message = format!("sniping {} ({:?})", short(&mint), trigger);
         }
 
+        let engine_keystore = self.keystore.clone();
         tokio::spawn(async move {
             match bundler::execute_buy_per_wallet(&snipers, &mint, &amounts, &cfg.network).await {
                 Ok(bundle_id) => {
@@ -350,7 +351,42 @@ impl Engine {
                         .cloned()
                         .map(|wallet| {
                             let rule = cfg.resolved_exit_for_wallet(&wallet.pubkey);
-                            (wallet, rule)
+                            // Resolve rebuy group → keypairs against the
+                            // engine's keystore. Keystore has both master
+                            // and snipers; either set can populate a
+                            // bundle group.
+                            let rebuy = rule.rebuy_group.as_ref().and_then(|group| {
+                                let mut keys: Vec<crate::keystore::StoredKeypair> =
+                                    Vec::with_capacity(group.wallet_pubkeys.len());
+                                for pk in &group.wallet_pubkeys {
+                                    let found = if engine_keystore
+                                        .master
+                                        .as_ref()
+                                        .map(|m| m.pubkey == *pk)
+                                        .unwrap_or(false)
+                                    {
+                                        engine_keystore.master.clone()
+                                    } else {
+                                        engine_keystore
+                                            .snipers
+                                            .iter()
+                                            .find(|s| s.pubkey == *pk)
+                                            .cloned()
+                                    };
+                                    if let Some(k) = found {
+                                        keys.push(k);
+                                    }
+                                }
+                                if keys.is_empty() {
+                                    return None;
+                                }
+                                Some(exit::RebuyChain {
+                                    label: group.name.clone(),
+                                    wallets: keys,
+                                    sol_per_wallet: group.default_sol_per_wallet,
+                                })
+                            });
+                            (wallet, rule, rebuy)
                         })
                         .collect::<Vec<_>>();
                     let amounts_by_wallet = snipers

@@ -41,6 +41,7 @@ function defaultBinding(): WalletProfileBinding {
     trailing_stop_pct: null,
     buy_presets_sol: [0.01, 0.05, 0.25, 0.5, 2.0],
     sell_presets_pct: [25, 50, 75, 100],
+    rebuy_group_id: null,
   };
 }
 
@@ -69,6 +70,7 @@ function migrateLegacy(legacy: WalletExitProfiles): WalletProfileBinding {
       legacy.sell_presets_pct && legacy.sell_presets_pct.length > 0
         ? legacy.sell_presets_pct
         : [25, 50, 75, 100],
+    rebuy_group_id: null,
   };
 }
 

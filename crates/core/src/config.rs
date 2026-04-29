@@ -30,7 +30,48 @@ pub struct Config {
     /// presets live on `wallet_bindings[pubkey]`.
     #[serde(default)]
     pub presets: GlobalPresets,
+    /// v0.1.52: named, saved sets of wallets+amounts. The user creates a
+    /// few groups ("Team Alpha", "Reserve") and references them by id from
+    /// the rebuy chain on Trade/Snipe/Launch — fires a fresh buy with
+    /// these wallets at this SOL amount the moment a sell completes.
+    #[serde(default)]
+    pub bundle_groups: Vec<BundleGroup>,
     pub network: NetworkConfig,
+}
+
+/// A reusable bundle of wallets with a default per-wallet SOL amount.
+/// Capped at 5 wallets to match the Jito bundle limit so a group can
+/// always be fired in a single transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleGroup {
+    pub id: String,
+    pub name: String,
+    pub wallet_pubkeys: Vec<String>,
+    pub default_sol_per_wallet: f64,
+}
+
+impl BundleGroup {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(!self.id.is_empty(), "bundle group id is required");
+        anyhow::ensure!(!self.name.trim().is_empty(), "bundle group name is required");
+        anyhow::ensure!(
+            !self.wallet_pubkeys.is_empty(),
+            "bundle group '{}' has no wallets",
+            self.name
+        );
+        anyhow::ensure!(
+            self.wallet_pubkeys.len() <= 5,
+            "bundle group '{}' has {} wallets — Jito bundle limit is 5",
+            self.name,
+            self.wallet_pubkeys.len()
+        );
+        anyhow::ensure!(
+            self.default_sol_per_wallet > 0.0,
+            "bundle group '{}' default_sol_per_wallet must be positive",
+            self.name
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +247,12 @@ pub struct WalletProfileBinding {
     pub buy_presets_sol: Vec<f64>,
     #[serde(default = "default_sell_presets")]
     pub sell_presets_pct: Vec<f64>,
+    /// v0.1.52: when this wallet's auto-exit fires (TP/SL/trailing/time),
+    /// look up `Config.bundle_groups` by this id and fire a follow-up
+    /// buy. None = no rebuy. Watcher does NOT re-arm after the rebuy —
+    /// it's one-shot per cycle to avoid runaway loops.
+    #[serde(default)]
+    pub rebuy_group_id: Option<String>,
 }
 
 impl WalletProfileBinding {
@@ -267,6 +314,7 @@ impl Default for WalletProfileBinding {
             trailing_stop_pct: None,
             buy_presets_sol: default_buy_presets(),
             sell_presets_pct: default_sell_presets(),
+            rebuy_group_id: None,
         }
     }
 }
@@ -391,6 +439,10 @@ impl Config {
                 rule: b.resolve(&self.profile_templates),
                 stop_loss_enabled: b.stop_loss_enabled,
                 trailing_stop_pct: b.trailing_stop_pct,
+                rebuy_group: b
+                    .rebuy_group_id
+                    .as_ref()
+                    .and_then(|id| self.bundle_groups.iter().find(|g| &g.id == id).cloned()),
             };
         }
         if let Some(p) = self.wallet_profiles.get(pubkey) {
@@ -398,6 +450,7 @@ impl Config {
                 rule: p.active(),
                 stop_loss_enabled: p.stop_loss_enabled,
                 trailing_stop_pct: p.trailing_stop_pct,
+                rebuy_group: None,
             };
         }
         if let Some(r) = self.wallet_exit_rules.get(pubkey) {
@@ -405,23 +458,31 @@ impl Config {
                 rule: r.clone(),
                 stop_loss_enabled: true,
                 trailing_stop_pct: None,
+                rebuy_group: None,
             };
         }
         ResolvedExit {
             rule: self.exit.clone(),
             stop_loss_enabled: true,
             trailing_stop_pct: None,
+            rebuy_group: None,
         }
+    }
+
+    pub fn bundle_group_by_id(&self, id: &str) -> Option<&BundleGroup> {
+        self.bundle_groups.iter().find(|g| g.id == id)
     }
 }
 
 /// Per-wallet exit rule resolved at run-time. Includes the TP/SL/hold numbers
-/// plus the per-wallet toggles (SL on/off, optional trailing-stop percent).
+/// plus the per-wallet toggles (SL on/off, optional trailing-stop percent),
+/// and the optional rebuy bundle group to fire after the auto-sell completes.
 #[derive(Debug, Clone)]
 pub struct ResolvedExit {
     pub rule: ExitConfig,
     pub stop_loss_enabled: bool,
     pub trailing_stop_pct: Option<f64>,
+    pub rebuy_group: Option<BundleGroup>,
 }
 
 impl ExitConfig {

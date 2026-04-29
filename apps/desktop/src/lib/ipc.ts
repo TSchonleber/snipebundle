@@ -120,6 +120,17 @@ export interface WalletProfileBinding {
   trailing_stop_pct: number | null;
   buy_presets_sol: number[];
   sell_presets_pct: number[];
+  /** v0.1.52: id into Config.bundle_groups; auto-rebuy after exit. */
+  rebuy_group_id: string | null;
+}
+
+/** v0.1.52: named, saved sets of wallets+amounts for chained rebuys. */
+export interface BundleGroup {
+  /** Empty string on create — backend assigns. */
+  id: string;
+  name: string;
+  wallet_pubkeys: string[];
+  default_sol_per_wallet: number;
 }
 
 export interface AppConfig {
@@ -157,6 +168,8 @@ export interface AppConfig {
     buy_presets_sol: number[];
     sell_presets_pct: number[];
   };
+  /** v0.1.52: saved bundle groups for chained rebuys. */
+  bundle_groups: BundleGroup[];
   network: {
     rpc_url: string;
     pumpportal_ws: string;
@@ -254,6 +267,12 @@ export const ipc = {
     }>("fan_out_from_master", {
       args: { recipients, sol_per_wallet: solPerWallet },
     }),
+  listBundleGroups: () =>
+    invoke<BundleGroup[]>("list_bundle_groups"),
+  saveBundleGroup: (group: BundleGroup) =>
+    invoke<BundleGroup>("save_bundle_group", { args: { group } }),
+  deleteBundleGroup: (id: string) =>
+    invoke<null>("delete_bundle_group", { args: { id } }),
   sendSol: (sourcePubkey: string, destination: string, sol: number) =>
     invoke<string>("send_sol", {
       args: { source_pubkey: sourcePubkey, destination, sol },

@@ -63,14 +63,14 @@ pub struct PositionPrice {
 /// (SL on/off, optional trailing-stop %). One watcher per wallet because each
 /// wallet may have a different rule and exit time.
 pub async fn watch_wallets_with_pricing(
-    wallets: Vec<(StoredKeypair, ResolvedExit)>,
+    wallets: Vec<(StoredKeypair, ResolvedExit, Option<RebuyChain>)>,
     mint: String,
     net: NetworkConfig,
     cancel: watch::Receiver<bool>,
     price_state: Arc<RwLock<PositionPrice>>,
 ) -> Vec<WalletExitResult> {
     let mut handles = Vec::with_capacity(wallets.len());
-    for (wallet, cfg) in wallets {
+    for (wallet, cfg, rebuy) in wallets {
         let wallet_pubkey = wallet.pubkey.clone();
         let wallet_mint = mint.clone();
         let wallet_net = net.clone();
@@ -81,6 +81,7 @@ pub async fn watch_wallets_with_pricing(
                 vec![wallet],
                 wallet_mint,
                 cfg,
+                rebuy,
                 wallet_net,
                 wallet_cancel,
                 wallet_price,
@@ -117,6 +118,7 @@ pub async fn watch_with_pricing(
     snipers: Vec<StoredKeypair>,
     mint: String,
     resolved: ResolvedExit,
+    rebuy: Option<RebuyChain>,
     net: NetworkConfig,
     cancel: watch::Receiver<bool>,
     price_state: Arc<RwLock<PositionPrice>>,
@@ -227,9 +229,32 @@ pub async fn watch_with_pricing(
         return outcome;
     }
 
-    match bundler::execute_sell(&snipers, &mint, &net).await {
+    let sell_result = bundler::execute_sell(&snipers, &mint, &net).await;
+    match sell_result {
         Ok(bundle_id) => {
             info!(mint = %mint, %bundle_id, ?outcome, "exit sell submitted");
+            // v0.1.52: optional follow-up buy via a saved bundle group.
+            // One-shot — we don't re-arm the watcher here; the user
+            // explicitly opts in per cycle by configuring rebuy_group_id
+            // on the wallet's binding. Looping rebuy → exit → rebuy is
+            // dangerous and intentionally not supported by this path.
+            if let Some(rebuy) = rebuy.as_ref() {
+                let amounts = vec![rebuy.sol_per_wallet; rebuy.wallets.len()];
+                match bundler::execute_buy_per_wallet(&rebuy.wallets, &mint, &amounts, &net).await {
+                    Ok(buy_id) => info!(
+                        group = %rebuy.label,
+                        wallets = rebuy.wallets.len(),
+                        sol_each = rebuy.sol_per_wallet,
+                        %buy_id,
+                        "auto-rebuy submitted"
+                    ),
+                    Err(e) => warn!(
+                        group = %rebuy.label,
+                        error = %e,
+                        "auto-rebuy failed"
+                    ),
+                }
+            }
             outcome
         }
         Err(e) => {
@@ -237,6 +262,16 @@ pub async fn watch_with_pricing(
             ExitOutcome::Failed(e.to_string())
         }
     }
+}
+
+/// Resolved bundle-group for a rebuy chain. The spawn site uses the
+/// unlocked keystore to translate pubkeys → keypairs once at watcher
+/// start; the watcher just signs+sends with what it's been given.
+#[derive(Clone)]
+pub struct RebuyChain {
+    pub label: String,
+    pub wallets: Vec<StoredKeypair>,
+    pub sol_per_wallet: f64,
 }
 
 /// Manual immediate dump (used by the Trade page and dashboard buttons).

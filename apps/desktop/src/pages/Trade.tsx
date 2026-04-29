@@ -8,7 +8,12 @@ import {
   cn,
   type WalletInfo,
 } from "@snipebundle/ui";
-import { ipc, type AmountStrategy, type AppConfig } from "../lib/ipc";
+import {
+  ipc,
+  type AmountStrategy,
+  type AppConfig,
+  type BundleGroup,
+} from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
 import { MintChart } from "../components/MintChart";
 
@@ -36,6 +41,12 @@ export function Trade() {
   // amount. One-shot: not a loop, the user re-enables for each chain.
   const [rebuyEnabled, setRebuyEnabled] = useState(false);
   const [rebuyAmount, setRebuyAmount] = useState("0.05");
+  // Bundle group to fire after the sell. "" = use the same wallets as
+  // the sell at `rebuyAmount` SOL each (legacy v0.1.51 behavior). Any
+  // other value is a saved group's id; we fire that group's wallets at
+  // its default SOL.
+  const [rebuyGroupId, setRebuyGroupId] = useState<string>("");
+  const [bundleGroups, setBundleGroups] = useState<BundleGroup[]>([]);
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -48,10 +59,12 @@ export function Trade() {
       ipc.listWallets(),
       ipc.listDevWallets().catch(() => [] as WalletInfo[]),
       ipc.loadConfig().catch(() => null),
+      ipc.listBundleGroups().catch(() => [] as BundleGroup[]),
     ])
-      .then(([base, devs, c]) => {
+      .then(([base, devs, c, gs]) => {
         setWallets([...base, ...devs]);
         if (c) setCfg(c);
+        setBundleGroups(gs);
       })
       .catch((e) => setError(String(e)));
   }, []);
@@ -172,13 +185,31 @@ export function Trade() {
     if (sellPercent <= 0 || sellPercent > 100) {
       return setError("Sell % must be 1–100.");
     }
-    let rebuySol: number | null = null;
+    // Resolve rebuy plan if enabled. Priority: saved group > "same wallets
+    // + uniform amount" fallback.
+    let rebuyPlan:
+      | { wallets: string[]; sol: number; label: string }
+      | null = null;
     if (rebuyEnabled) {
-      const v = parseFloat(rebuyAmount);
-      if (!Number.isFinite(v) || v <= 0) {
-        return setError("Rebuy amount must be positive.");
+      if (rebuyGroupId) {
+        const g = bundleGroups.find((x) => x.id === rebuyGroupId);
+        if (!g) return setError("Selected rebuy group no longer exists.");
+        rebuyPlan = {
+          wallets: g.wallet_pubkeys,
+          sol: g.default_sol_per_wallet,
+          label: g.name,
+        };
+      } else {
+        const v = parseFloat(rebuyAmount);
+        if (!Number.isFinite(v) || v <= 0) {
+          return setError("Rebuy amount must be positive.");
+        }
+        rebuyPlan = {
+          wallets: picked,
+          sol: v,
+          label: "same wallets",
+        };
       }
-      rebuySol = v;
     }
     setBusy(true);
     try {
@@ -191,25 +222,24 @@ export function Trade() {
         { kind: "sell", bundle_id: id, mint: mint.trim(), ts: Date.now() },
         ...h,
       ]);
-      if (rebuySol != null) {
-        // Chain a follow-up buy. Same wallets, same mint, uniform amount.
-        // We fire it in the same submit handler so the user sees both
-        // bundle IDs in the history without needing to click again. If
-        // the rebuy itself errors, surface that error but keep the sell
-        // entry — the sell already submitted, and the user needs to know
-        // the chain broke.
+      if (rebuyPlan) {
+        // Chain a follow-up buy. Wallets and amount come from the
+        // resolved plan above (saved group OR "same wallets + uniform").
+        // If the rebuy itself errors, surface that error but keep the
+        // sell entry — the sell already submitted, the user needs to
+        // know the chain broke.
         try {
           const buyId = await ipc.manualSnipe({
             mint: mint.trim(),
-            wallet_pubkeys: picked,
-            strategy: { kind: "uniform", sol: rebuySol },
+            wallet_pubkeys: rebuyPlan.wallets,
+            strategy: { kind: "uniform", sol: rebuyPlan.sol },
           });
           setHistory((h) => [
             { kind: "buy", bundle_id: buyId, mint: mint.trim(), ts: Date.now() },
             ...h,
           ]);
         } catch (e) {
-          setError(`Sell submitted but rebuy failed: ${e}`);
+          setError(`Sell submitted but rebuy (${rebuyPlan.label}) failed: ${e}`);
         }
       }
     } catch (e) {
@@ -493,19 +523,49 @@ export function Trade() {
                     </span>
                   </label>
                   {rebuyEnabled && (
-                    <div className="flex items-center gap-2 pl-6">
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={rebuyAmount}
-                        onChange={(e) => setRebuyAmount(e.target.value)}
-                        placeholder="SOL"
-                        className="w-28 rounded border border-border bg-bg px-2 py-1 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-                      />
-                      <span className="font-mono text-2xs text-fg-subtle">
-                        SOL per wallet, same {picked.length || "?"} wallet
-                        {picked.length === 1 ? "" : "s"} as the sell
-                      </span>
+                    <div className="space-y-2 pl-6">
+                      <div>
+                        <label className="block font-mono text-2xs text-fg-subtle mb-1">
+                          Bundle group
+                        </label>
+                        <select
+                          value={rebuyGroupId}
+                          onChange={(e) => setRebuyGroupId(e.target.value)}
+                          className="w-full rounded border border-border bg-bg px-2 py-1 font-mono text-2xs focus:outline-none focus:ring-2 focus:ring-accent"
+                        >
+                          <option value="">
+                            same wallets as sell — manual amount
+                          </option>
+                          {bundleGroups.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.name} ({g.wallet_pubkeys.length} wallet
+                              {g.wallet_pubkeys.length === 1 ? "" : "s"} ·{" "}
+                              {g.default_sol_per_wallet} SOL each)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {rebuyGroupId === "" ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={rebuyAmount}
+                            onChange={(e) => setRebuyAmount(e.target.value)}
+                            placeholder="SOL"
+                            className="w-28 rounded border border-border bg-bg px-2 py-1 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                          <span className="font-mono text-2xs text-fg-subtle">
+                            SOL per wallet, same {picked.length || "?"} wallet
+                            {picked.length === 1 ? "" : "s"} as the sell
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="font-mono text-2xs text-fg-subtle">
+                          Manage saved groups on{" "}
+                          <span className="text-fg-muted">/wallets &gt; groups</span>
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

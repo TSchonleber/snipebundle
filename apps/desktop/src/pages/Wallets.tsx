@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn, type WalletInfo } from "@snipebundle/ui";
 import { ipc } from "../lib/ipc";
 import { AppNav } from "../components/AppNav";
+import { BundleGroupsManager } from "../components/BundleGroupsManager";
 import { FanOutPanel } from "../components/FanOutPanel";
 import { SendPanel } from "../components/SendPanel";
 import { WalletManager } from "../components/WalletManager";
@@ -10,12 +11,13 @@ import { ExportKeysModal } from "../components/ExportKeysModal";
 
 const DEFAULT_PER_WALLET = 0.55;
 
-type Section = "wallets" | "manage" | "fund";
+type Section = "wallets" | "manage" | "fund" | "groups";
 
 const SECTIONS: { id: Section; label: string; sub: string }[] = [
   { id: "wallets", label: "wallets", sub: "operate" },
   { id: "manage", label: "manage", sub: "create / import" },
   { id: "fund", label: "fund", sub: "master → snipers" },
+  { id: "groups", label: "groups", sub: "saved bundle groups" },
 ];
 
 export function Wallets() {
@@ -142,6 +144,10 @@ export function Wallets() {
               <EmptyHint>no wallets yet — go to /welcome to create a keystore</EmptyHint>
             )}
           </>
+        )}
+
+        {section === "groups" && (
+          <BundleGroupsManager wallets={wallets} />
         )}
 
         {section === "fund" && (
