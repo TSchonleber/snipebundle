@@ -948,25 +948,52 @@ pub async fn fetch_pumpfun_chart(mint: &str) -> Result<PumpChartData> {
         .map(|complete| !complete)
         .unwrap_or(true);
 
-    let trades_url = format!(
-        "https://frontend-api-v3.pump.fun/trades/all/{}?limit=200&offset=0&minimumSize=0",
-        mint
-    );
-    let resp = client
-        .get(&trades_url)
-        .header("accept", "application/json")
-        .header("origin", "https://pump.fun")
-        .header("referer", "https://pump.fun/")
-        .send()
-        .await
-        .context("pumpchart trades fetch")?;
-    let trades = if resp.status().is_success() {
-        let json: serde_json::Value = resp.json().await.context("trades parse")?;
+    // Paginate so we get the full available history, not just the most
+    // recent 200 trades. pump.fun caps each page at 200; pull up to 5
+    // pages (1000 trades) in parallel — covers the coin's full lifetime
+    // for everything except a handful of hyperactive launches. Stop early
+    // when a page comes back short — that's the tail of available history.
+    const PAGE_SIZE: u32 = 200;
+    const MAX_PAGES: u32 = 5;
+
+    let mut handles = Vec::with_capacity(MAX_PAGES as usize);
+    for page in 0..MAX_PAGES {
+        let url = format!(
+            "https://frontend-api-v3.pump.fun/trades/all/{}?limit={}&offset={}&minimumSize=0",
+            mint,
+            PAGE_SIZE,
+            page * PAGE_SIZE
+        );
+        let client = client.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .get(&url)
+                .header("accept", "application/json")
+                .header("origin", "https://pump.fun")
+                .header("referer", "https://pump.fun/")
+                .send()
+                .await
+        }));
+    }
+
+    let mut all_pages: Vec<Vec<PumpTrade>> = Vec::with_capacity(MAX_PAGES as usize);
+    for (idx, handle) in handles.into_iter().enumerate() {
+        let resp = match handle.await {
+            Ok(Ok(r)) => r,
+            _ => continue,
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let json: serde_json::Value = match resp.json().await {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
         let arr = match &json {
             serde_json::Value::Array(a) => a.as_slice(),
             _ => &[],
         };
-        let mut out = Vec::with_capacity(arr.len());
+        let mut page = Vec::with_capacity(arr.len());
         for t in arr {
             let sol_amount =
                 t.get("sol_amount").and_then(|x| x.as_f64()).unwrap_or(0.0)
@@ -982,26 +1009,39 @@ pub async fn fetch_pumpfun_chart(mint: &str) -> Result<PumpChartData> {
             let timestamp_ms = t
                 .get("timestamp")
                 .and_then(|x| x.as_i64())
-                .map(|s| s * 1000) // pump.fun returns seconds
+                .map(|s| s * 1000)
                 .unwrap_or(0);
-            out.push(PumpTrade {
+            page.push(PumpTrade {
                 timestamp_ms,
                 is_buy: t.get("is_buy").and_then(|x| x.as_bool()).unwrap_or(true),
                 sol_amount,
                 token_amount,
                 price_sol,
-                usd_market_cap: t
-                    .get("usd_market_cap")
-                    .and_then(|x| x.as_f64()),
+                usd_market_cap: t.get("usd_market_cap").and_then(|x| x.as_f64()),
                 user: t.get("user").and_then(|x| x.as_str()).map(String::from),
             });
         }
-        // Newest first → reverse so chart x-axis flows oldest → newest.
-        out.reverse();
-        out
-    } else {
-        Vec::new()
-    };
+        // Page ran short → no more history past this offset.
+        let last_short = (page.len() as u32) < PAGE_SIZE;
+        all_pages.push(page);
+        if last_short && idx + 1 < MAX_PAGES as usize {
+            break;
+        }
+    }
+
+    // Each page is newest-first; concatenated they're still newest-first
+    // overall. Reverse the merged list so the chart x-axis flows oldest
+    // → newest. Dedup defensively by timestamp+user — pagination drift
+    // around live trading can cause overlap between pages.
+    let mut combined: Vec<PumpTrade> = all_pages.into_iter().flatten().collect();
+    combined.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    combined.dedup_by(|a, b| {
+        a.timestamp_ms == b.timestamp_ms
+            && a.user == b.user
+            && a.sol_amount == b.sol_amount
+    });
+    combined.reverse();
+    let trades = combined;
 
     Ok(PumpChartData {
         mint: mint.to_string(),

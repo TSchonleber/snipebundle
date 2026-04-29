@@ -131,7 +131,11 @@ export function PumpfunChart({ mint, height }: Props) {
       };
       setTrades((prev) => {
         const next = [...prev, trade];
-        return next.length > 1500 ? next.slice(next.length - 1500) : next;
+        // Keep the full lifetime of the coin's history within reach. A
+        // very active token still won't blow past this in a session;
+        // capping much lower clipped the seeded launch trades on busy
+        // coins.
+        return next.length > 5000 ? next.slice(next.length - 5000) : next;
       });
     });
     return () => {
