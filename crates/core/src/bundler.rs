@@ -452,6 +452,12 @@ pub async fn execute_sell_pct(
     );
     let owners: Vec<String> = snipers.iter().map(|s| s.pubkey.clone()).collect();
     let balances = crate::balance::get_token_balances(&net.rpc_url, &owners, mint).await;
+    // Sell tx still costs SOL — Jito tip + priority fee + base tx fee.
+    // A wallet that emptied its SOL on the buy can't pay for the sell;
+    // including it would bounce the whole bundle. Drop it with a warn so
+    // the rest of the wallets in the bundle still execute.
+    let sol_balances = crate::balance::get_sol_balances(&net.rpc_url, &owners).await;
+    let min_sol_for_sell = net.jito_tip_sol + net.priority_fee_sol + 0.001;
 
     let mut active_snipers = Vec::with_capacity(snipers.len());
     let mut amounts = Vec::with_capacity(snipers.len());
@@ -459,6 +465,17 @@ pub async fn execute_sell_pct(
         let bal = *balances.get(&sk.pubkey).unwrap_or(&0.0);
         if bal <= 0.0 {
             tracing::warn!(wallet = %sk.pubkey, mint = %mint, "skipping wallet with zero token balance");
+            continue;
+        }
+        let sol = *sol_balances.get(&sk.pubkey).unwrap_or(&0.0);
+        if sol + 1e-9 < min_sol_for_sell {
+            tracing::warn!(
+                wallet = %sk.pubkey,
+                mint = %mint,
+                sol_balance = sol,
+                required = min_sol_for_sell,
+                "skipping wallet that lacks SOL for tip/fee — refund this wallet and retry"
+            );
             continue;
         }
         let to_sell = bal * (percent / 100.0);
@@ -471,7 +488,8 @@ pub async fn execute_sell_pct(
 
     anyhow::ensure!(
         !active_snipers.is_empty(),
-        "no wallets hold any of {mint}; nothing to sell"
+        "no wallets can sell {mint}: each holder either has 0 tokens or lacks SOL for the sell tx (need ≥{:.4} SOL per wallet)",
+        min_sol_for_sell
     );
 
     tracing::info!(
