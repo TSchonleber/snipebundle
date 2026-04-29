@@ -20,9 +20,9 @@ export function Trending() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<number | null>(null);
-  const [filter, setFilter] = useState<"all" | "dexscreener" | "geckoterminal">(
-    "all",
-  );
+  const [filter, setFilter] = useState<
+    "all" | "pumpfun" | "dexscreener" | "geckoterminal"
+  >("all");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -49,7 +49,9 @@ export function Trending() {
       ? true
       : filter === "dexscreener"
         ? i.source.startsWith("dexscreener")
-        : i.source === filter,
+        : filter === "pumpfun"
+          ? i.source === "pumpfun"
+          : i.source === filter,
   );
 
   function handleLaunch(item: TrendingItem) {
@@ -99,10 +101,11 @@ export function Trending() {
           </div>
         </div>
 
-        <div className="mt-4 flex gap-2">
+        <div className="mt-4 flex gap-2 flex-wrap">
           {(
             [
               ["all", "All"],
+              ["pumpfun", "pump.fun (live)"],
               ["dexscreener", "DexScreener"],
               ["geckoterminal", "GeckoTerminal"],
             ] as const
@@ -299,9 +302,14 @@ function TrendingRow({
 
 function SourceBadge({ source }: { source: string }) {
   const map: Record<string, { label: string; color: string }> = {
+    pumpfun: { label: "PUMP", color: "text-accent border-accent/40" },
     dexscreener: { label: "DEX", color: "text-fg-muted border-border" },
     "dexscreener-boost": { label: "BOOST", color: "text-warn border-warn/40" },
-    geckoterminal: { label: "GECKO", color: "text-accent/70 border-accent/30" },
+    "dexscreener-latest": {
+      label: "NEW",
+      color: "text-accent border-accent/30",
+    },
+    geckoterminal: { label: "GECKO", color: "text-fg-subtle border-border" },
   };
   const meta = map[source] ?? { label: source, color: "text-fg-subtle border-border" };
   return (

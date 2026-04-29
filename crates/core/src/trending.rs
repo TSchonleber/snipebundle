@@ -1,8 +1,11 @@
 //! Multi-source trending Solana token signal feed.
 //!
 //! Aggregates free public sources to surface "what's pumping right now":
-//!   - DexScreener  (`/latest/dex/search` + `/token-boosts/latest/v1`)
+//!   - DexScreener  (`/latest/dex/search` + `/token-boosts/latest/v1`
+//!                   + `/token-profiles/latest/v1`
+//!                   + `/latest/dex/tokens/<mints>` for image enrichment)
 //!   - GeckoTerminal (`/networks/solana/trending_pools`)
+//!   - pump.fun     (`/coins/for-you` for live launches)
 //!
 //! No X API. No paid scrapers. Free endpoints with rate limits — we cache
 //! per call and tolerate per-source failures (one source down doesn't kill
@@ -17,8 +20,14 @@ const DEXSCREENER_SOLANA_SEARCH: &str =
     "https://api.dexscreener.com/latest/dex/search?q=SOL";
 const DEXSCREENER_BOOSTS_LATEST: &str =
     "https://api.dexscreener.com/token-boosts/latest/v1";
+const DEXSCREENER_PROFILES_LATEST: &str =
+    "https://api.dexscreener.com/token-profiles/latest/v1";
+const DEXSCREENER_TOKENS_BATCH: &str =
+    "https://api.dexscreener.com/latest/dex/tokens/";
 const GECKOTERMINAL_TRENDING: &str =
     "https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?include=base_token,quote_token";
+const PUMPFUN_FOR_YOU: &str =
+    "https://frontend-api-v3.pump.fun/coins/for-you?offset=0&limit=40&includeNsfw=false";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TrendingItem {
@@ -42,15 +51,19 @@ pub struct TrendingItem {
 }
 
 /// Fetch from all sources in parallel; deduplicate by mint, prefer the
-/// entry with more populated fields.
+/// entry with more populated fields. Then enrich the survivors via DexScreener
+/// tokens batch API so every entry that has a mint also has an image where
+/// possible.
 pub async fn fetch_all() -> Vec<TrendingItem> {
-    let (dex, gecko) = tokio::join!(
+    let (dex, gecko, profiles, pumpfun) = tokio::join!(
         fetch_dexscreener_trending(),
         fetch_geckoterminal_trending(),
+        fetch_dexscreener_profiles(),
+        fetch_pumpfun_live(),
     );
 
     let mut out: Vec<TrendingItem> = Vec::new();
-    for r in [dex, gecko] {
+    for r in [dex, gecko, profiles, pumpfun] {
         match r {
             Ok(items) => out.extend(items),
             Err(e) => warn!(error = %e, "trending source failed"),
@@ -85,8 +98,105 @@ pub async fn fetch_all() -> Vec<TrendingItem> {
                     .unwrap_or(std::cmp::Ordering::Equal),
             )
     });
-    combined.truncate(100);
+    combined.truncate(120);
+
+    // Enrich entries that lack images via DexScreener tokens batch API.
+    // GeckoTerminal trending pools don't carry icons; pump.fun gives us
+    // image_uri but not always; this fills the gaps.
+    enrich_images(&mut combined).await;
+
     combined
+}
+
+/// Best-effort: for entries with a mint but no image_url, batch-query
+/// DexScreener `/latest/dex/tokens/<mints>` (up to 30 mints per call) and
+/// fill in image_url + boost_amount from `pairs[0].info.imageUrl` /
+/// `pairs[0].boosts.active`. Failures are logged and ignored — enrichment
+/// is purely additive.
+async fn enrich_images(items: &mut Vec<TrendingItem>) {
+    let needs: Vec<String> = items
+        .iter()
+        .filter(|i| i.image_url.is_none() && i.mint.is_some())
+        .filter_map(|i| i.mint.clone())
+        .take(60) // 2 batches of 30 — cap so we don't hammer the API
+        .collect();
+    if needs.is_empty() {
+        return;
+    }
+
+    let client = match reqwest::Client::builder()
+        .user_agent("snipebundle/0.1")
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "enrich client build failed");
+            return;
+        }
+    };
+
+    let mut enriched: HashMap<String, (Option<String>, Option<f64>)> = HashMap::new();
+    for chunk in needs.chunks(30) {
+        let url = format!("{}{}", DEXSCREENER_TOKENS_BATCH, chunk.join(","));
+        let resp = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "enrich fetch failed");
+                continue;
+            }
+        };
+        let json: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "enrich parse failed");
+                continue;
+            }
+        };
+        let Some(pairs) = json.get("pairs").and_then(|x| x.as_array()) else {
+            continue;
+        };
+        for p in pairs {
+            let Some(mint) = p
+                .get("baseToken")
+                .and_then(|b| b.get("address"))
+                .and_then(|x| x.as_str())
+            else {
+                continue;
+            };
+            let entry = enriched.entry(mint.to_string()).or_insert((None, None));
+            if entry.0.is_none() {
+                entry.0 = p
+                    .get("info")
+                    .and_then(|i| i.get("imageUrl"))
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+            }
+            let boost = p
+                .get("boosts")
+                .and_then(|b| b.get("active"))
+                .and_then(|x| x.as_f64());
+            if let Some(b) = boost {
+                if entry.1.unwrap_or(0.0) < b {
+                    entry.1 = Some(b);
+                }
+            }
+        }
+    }
+
+    for it in items {
+        let Some(mint) = it.mint.as_deref() else {
+            continue;
+        };
+        if let Some((img, boost)) = enriched.get(mint) {
+            if it.image_url.is_none() {
+                it.image_url = img.clone();
+            }
+            if it.boost_amount.is_none() && boost.is_some() {
+                it.boost_amount = *boost;
+            }
+        }
+    }
 }
 
 fn merge_better(into: &mut TrendingItem, other: &TrendingItem) {
@@ -376,5 +486,152 @@ pub async fn fetch_geckoterminal_trending() -> Result<Vec<TrendingItem>> {
         });
     }
 
+    Ok(out)
+}
+
+/// DexScreener `/token-profiles/latest/v1` — recently profiled (and often
+/// boosted) tokens. This catches "live launches" that haven't shown up in
+/// search results yet.
+pub async fn fetch_dexscreener_profiles() -> Result<Vec<TrendingItem>> {
+    let client = reqwest::Client::builder()
+        .user_agent("snipebundle/0.1")
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("dexscreener-profiles client build")?;
+    let resp = client
+        .get(DEXSCREENER_PROFILES_LATEST)
+        .send()
+        .await
+        .context("dexscreener-profiles fetch")?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .context("dexscreener-profiles parse")?;
+    // The endpoint returns a JSON array directly.
+    let arr = match &json {
+        serde_json::Value::Array(a) => a.as_slice(),
+        // Some shapes wrap in `{ "items": [...] }` — tolerate both.
+        _ => json.get("items").and_then(|x| x.as_array()).map(|v| v.as_slice()).unwrap_or(&[]),
+    };
+
+    let mut out = Vec::new();
+    for entry in arr {
+        let chain = entry.get("chainId").and_then(|x| x.as_str()).unwrap_or("");
+        if chain != "solana" {
+            continue;
+        }
+        let mint = entry
+            .get("tokenAddress")
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        if mint.is_none() {
+            continue;
+        }
+        let url = entry.get("url").and_then(|x| x.as_str()).map(String::from);
+        let description = entry
+            .get("description")
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        let image_url = entry
+            .get("icon")
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        out.push(TrendingItem {
+            source: "dexscreener-latest".into(),
+            name: description,
+            symbol: None,
+            mint,
+            price_usd: None,
+            change_pct_24h: None,
+            volume_usd_24h: None,
+            market_cap_usd: None,
+            url,
+            age_minutes: None,
+            dex_id: None,
+            image_url,
+            boost_amount: None,
+        });
+    }
+    Ok(out)
+}
+
+/// pump.fun frontend API — the actual live launch firehose. Returns the
+/// freshest pump.fun coins with name/symbol/image and an approximate market
+/// cap. Unofficial endpoint; tolerate failures.
+pub async fn fetch_pumpfun_live() -> Result<Vec<TrendingItem>> {
+    let client = reqwest::Client::builder()
+        // pump.fun's frontend API filters out plain bot UAs; pass a normal
+        // browser-shaped UA so the request survives.
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .context("pumpfun client build")?;
+    let resp = client
+        .get(PUMPFUN_FOR_YOU)
+        .header("accept", "application/json")
+        .header("origin", "https://pump.fun")
+        .header("referer", "https://pump.fun/")
+        .send()
+        .await
+        .context("pumpfun fetch")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("pumpfun status {}", resp.status());
+    }
+    let json: serde_json::Value = resp.json().await.context("pumpfun parse")?;
+    let arr = match &json {
+        serde_json::Value::Array(a) => a.as_slice(),
+        _ => &[],
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let mut out = Vec::new();
+    for entry in arr {
+        let mint = entry.get("mint").and_then(|x| x.as_str()).map(String::from);
+        if mint.is_none() {
+            continue;
+        }
+        let name = entry.get("name").and_then(|x| x.as_str()).map(String::from);
+        let symbol = entry
+            .get("symbol")
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        let image_url = entry
+            .get("image_uri")
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        let market_cap_usd = entry
+            .get("usd_market_cap")
+            .and_then(|x| x.as_f64())
+            .filter(|v| *v > 0.0);
+        let created_ts = entry
+            .get("created_timestamp")
+            .and_then(|x| x.as_i64());
+        let age_minutes = created_ts.map(|t| ((now_ms - t) / 60_000).max(0));
+        let url = mint
+            .as_ref()
+            .map(|m| format!("https://pump.fun/coin/{m}"));
+        out.push(TrendingItem {
+            source: "pumpfun".into(),
+            name,
+            symbol,
+            mint,
+            price_usd: None,
+            change_pct_24h: None,
+            volume_usd_24h: None,
+            market_cap_usd,
+            url,
+            age_minutes,
+            dex_id: Some("pumpfun".into()),
+            image_url,
+            boost_amount: None,
+        });
+    }
     Ok(out)
 }
